@@ -33,7 +33,14 @@ function App() {
   const [error, setError] = useState('')
   const [events, setEvents] = useState([])
   const [receipt, setReceipt] = useState(() => {
-    try { return JSON.parse(sessionStorage.getItem('approval-receipt')) } catch { return null }
+    try {
+      const saved = JSON.parse(sessionStorage.getItem('approval-receipt'))
+      if (['COMPLETED', 'REJECTED'].includes(saved?.run?.status)) {
+        sessionStorage.removeItem('approval-receipt')
+        return null
+      }
+      return saved
+    } catch { return null }
   })
   useEffect(() => {
     if (!receipt?.recorded || !receipt.runId) return
@@ -46,6 +53,10 @@ function App() {
         if (['COMPLETED', 'REJECTED', 'ROLLED_BACK'].includes(saved.status)) clearInterval(timer)
         if (!cancelled) setReceipt(previous => {
           if (!previous || previous.runId !== receipt.runId) return previous
+          if (['COMPLETED', 'REJECTED'].includes(saved.status)) {
+            sessionStorage.removeItem('approval-receipt')
+            return null
+          }
           const next = { ...previous, run: saved }
           sessionStorage.setItem('approval-receipt', JSON.stringify(next))
           return next
@@ -69,6 +80,8 @@ function App() {
   const latest = data?.runs?.[0]
   useEffect(() => { if (page === 'workflow' && latest?.run_id) request(`/runs/${latest.run_id}/events`).then(setEvents).catch(() => setEvents([])) }, [page, latest?.run_id])
   const run = data?.runs?.find(r => r.status === 'WAITING_APPROVAL') || latest
+  const visibleReceipt = receipt || (run?.approval_decision && !['COMPLETED', 'REJECTED', 'ROLLED_BACK'].includes(run.status)
+    ? { runId: run.run_id, decision: run.approval_decision, recorded: true, run } : null)
   const trigger = data?.current_evaluation?.evolution_threshold || {}
   const active = data?.active_policy || {}
   const evaluation = run?.evaluation || data?.evaluations?.at(-1)
@@ -110,13 +123,12 @@ function App() {
     </aside>
     <main className="main-content">
       <header className="topbar"><div><span className="eyebrow">RECONFORGE / {page.toUpperCase()}</span><h1>{nav.find(n => n[0] === page)?.[2]}</h1></div><div className="top-right"><span className="live-pill"><i/> Live · updates every 4 sec</span><button className="icon-button" onClick={refresh} title="Refresh">↻</button><div className="avatar">RF</div></div></header>
-      {receipt && <ApprovalReceipt receipt={receipt} dismiss={() => { setReceipt(null); sessionStorage.removeItem('approval-receipt') }}/>}
       {error && <div className="notice error"><b>Connection issue</b> · {error}</div>}{notice && <div className="notice success" role="status" aria-live="polite">✓ {notice}</div>}
       {!data ? <section className="panel"><h2>Dashboard unavailable</h2><p>Check that the API is running and configured.</p><button className="button" onClick={refresh}>Retry</button></section> : <>
         {page === 'overview' && <Overview data={data} latest={latest} trigger={trigger} history={history} start={start} seed={() => act('Demo dataset seeded', '/demo/seed', {})} busy={busy} go={navTo}/>}
         {page === 'backtesting' && <Backtesting data={data} latest={latest} run={run} evaluation={evaluation} start={start} busy={busy}/>}
         {page === 'patches' && <PolicyHistory data={data}/>}
-        {page === 'approval' && <Approval data={data} run={run} evaluation={evaluation} approve={approval} busy={busy} start={start}/>}
+        {page === 'approval' && <Approval data={data} run={run} evaluation={evaluation} approve={approval} busy={busy} start={start} receipt={visibleReceipt} dismissReceipt={() => { setReceipt(null); sessionStorage.removeItem('approval-receipt') }}/>}
         {page === 'workflow' && <Workflow data={data} run={latest} events={events}/>}
         {page === 'reconciliation' && <Reconciliation data={data}/>}
       </>}
@@ -208,14 +220,15 @@ function Backtesting({ data, latest, run, evaluation, start, busy }) {
   </>
 }
 
-function Approval({ data, run, evaluation, approve, busy, start }) {
+function Approval({ data, run, evaluation, approve, busy, start, receipt, dismissReceipt }) {
   const pending = run?.status === 'WAITING_APPROVAL' && !run?.approval_decision
   const proposal = run?.proposal || {}
   const patch = proposal.candidate_patch || {}
   const change = patchInfo(patch)
   return <>
     <section className="hero"><div><div className="eyebrow">GOVERNED POLICY CHANGE</div><h2>{pending ? 'Review candidate patch' : 'Human approval'}</h2><p>{pending ? 'A passing backtest is ready for your decision.' : 'Candidates appear here after a successful backtest and guardrail review.'}</p></div><Status value={run?.status}/></section>
-    {run?.approval_decision && !['COMPLETED', 'REJECTED', 'ROLLED_BACK'].includes(run.status) && <div className="notice success" role="status" aria-live="polite"><b>{run.approval_decision === 'APPROVE' ? '✓ Approval recorded' : 'Rejection recorded'}</b><p>{run.approval_decision !== 'APPROVE' ? 'The workflow is closing.' : ['promote', 'replay', 'memory_write'].includes(run.current_node) ? 'Promotion started. Policy activation and verification are running in the background.' : 'Promotion is queued and will start automatically. You can continue using the application.'}</p><PromotionProgress run={run}/></div>}
+
+    {receipt && <ApprovalReceipt receipt={receipt} dismiss={dismissReceipt}/>}
     {pending ? <><section className="panel"><div className="panel-heading"><div><div className="eyebrow">PROPOSED CHANGE</div><h2>{processorLabel(patch.processor, data.active_policy) || 'Processor'} {change.label.toLowerCase()}</h2></div><span className="change-pill">{patch[change.patch] ?? '—'}{change.unit}</span></div><p>{proposal.reason || 'No rationale provided.'}</p><div className="content-grid"><div className="subpanel"><small>RISK</small><p>{proposal.risk || 'Not specified'}</p></div><div className="subpanel"><small>BACKTEST GATE</small><p>{evaluation?.guardrails?.passed ? 'Passed — candidate is eligible for review.' : 'Candidate did not pass the required safety checks.'}</p></div></div><PolicyDiff baseline={run.baseline_policy} candidate={run.candidate_policy} patch={patch} change={change}/><div className="metric-grid compact"><Metric label="Current live accuracy" value={data.current_evaluation?.current_metrics?.accuracy == null ? 'Pending' : pct(data.current_evaluation.current_metrics.accuracy)} hint={`${count(data.current_evaluation?.position)} ingested records · active policy`} icon="⌁"/><Metric label="Active backtest accuracy" value={evaluation?.baseline?.accuracy == null ? 'Pending' : pct(evaluation.baseline.accuracy)} hint={`${count(evaluation?.baseline?.sample_size)} historical records`} icon="▤"/><Metric label="Candidate backtest accuracy" value={evaluation?.candidate?.accuracy == null ? 'Pending' : pct(evaluation.candidate.accuracy)} hint={`Gain ${((evaluation?.candidate?.accuracy - evaluation?.baseline?.accuracy) * 100).toFixed(1)} percentage points · awaiting approval`} icon="↗"/><Metric label="Auto-resolution" value={pct(evaluation?.candidate?.auto_resolution_rate)} hint={`Baseline ${pct(evaluation?.baseline?.auto_resolution_rate)}`} icon="↗"/><Metric label="False matches" value={count(evaluation?.candidate?.false_auto)} hint={`Rate ${pct(evaluation?.candidate?.false_match_rate)}`} icon="!"/><Metric label="Backtest records" value={count(evaluation?.candidate?.sample_size)} hint="Deterministic sample" icon="▤"/></div><PromotionProgress run={run}/><div className="decision-row"><button className="button danger-outline" disabled={busy} onClick={() => approve('REJECT')}>Reject candidate</button><button className="button primary" disabled={busy || !evaluation?.guardrails?.passed} onClick={() => approve('APPROVE')}>{busy ? 'Recording approval…' : 'Approve & resume'}</button></div></section></> : <section className="panel empty"><div className="empty-icon">✓</div><h3>No candidate awaiting approval</h3><p>{run?.status === 'RUNNING' ? `Workflow is currently ${stageNames[run.current_node] || run.current_node}. This page updates automatically.` : run?.status === 'ERROR' ? `Latest workflow failed at ${stageNames[run.current_node] || run.current_node}: ${run.error_details?.message || run.error}` : 'Start an evaluation workflow to look for a safe improvement.'}</p>{!run || run.status !== 'RUNNING' ? <button className="button primary" disabled={busy || run?.status === 'WAITING_FOR_DATA'} onClick={start}>Start workflow</button> : null}</section>}
     <RecentRuns data={data} go={() => {}}/>
   </>

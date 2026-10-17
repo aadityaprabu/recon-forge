@@ -1,0 +1,17 @@
+{
+  "run_id": "2f8218b7-f65b-4554-9876-a24713b202ec",
+  "status": "COMPLETED",
+  "candidate_version": "v-2f8218b7-f65b-4554-9876-a24713b202ec",
+  "memory_id": "MEM-2f8218b7-f65b-4554-9876-a24713b202ec-v-2f8218b7-f65b-4554-9876-a24713b202ec",
+  "baseline": {
+    "accuracy": 0.45
+  },
+  "candidate": {
+    "accuracy": 0.5
+  },
+  "post_guardrails": {
+    "passed": true,
+    "reasons": [],
+    "requires_human": true
+  }
+}

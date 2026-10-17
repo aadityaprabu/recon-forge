@@ -1,0 +1,5 @@
+This additional segment records a real approval in the running demo. The candidate changes Adyen's settlement window from two to five business days, based on repeated date boundary failures. The review compares the active policy with the proposed version before the approval button is clicked.
+
+The application first confirms that approval has been recorded. Promotion then continues in the background. The four stage panel shows policy promotion, replay verification, saving verified memory, and completion. The active stage has a spinner, while finished stages receive green checkmarks.
+
+The recording follows the saved workflow rather than treating a button click as instant success. After verification succeeds, the policy history preserves the new version and evaluation results. The temporary green confirmation disappears when processing is complete. Waiting periods in this additional footage have been condensed.

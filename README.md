@@ -2,6 +2,16 @@
 
 ReconForge demonstrates governed policy evolution for transaction reconciliation. It matches internal ledger records to processor settlements, diagnoses recurring breaks, and proposes small policy updates. Independent evaluation and human approval control which changes become active.
 
+## Extended demo with recorded approval
+
+**[Watch the extended demo — 4:00](reconforge-demo-extended.mp4)**
+
+The original three-minute walkthrough is followed by one minute of actual approval footage with narration. The appended segment records an operator approving Adyen's settlement-window update from two to five business days, the approval acknowledgement, and the four-stage promotion panel. The verified completion card summarizes the saved outcome: replay passed, memory saved, and historical benchmark accuracy increased from **45% to 50%**. Waiting periods are condensed.
+
+[Approval segment only — 1:00](reconforge-approval-process.mp4) · [Verified outcome](artifacts/demo/approval-outcome.json) · [Approval narration transcript](artifacts/demo/approval-narration.txt)
+
+The approval confirmation now appears only within Human approval and disappears after completion; duplicate/global top banners have been removed.
+
 ## Three-minute video demo
 
 [![Watch the ReconForge demo](artifacts/screenshots/01-dashboard-slide.png)](reconforge-demo-3min.mp4)
