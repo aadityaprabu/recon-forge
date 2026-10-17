@@ -15,6 +15,7 @@ from app.error_details import error_details
 from pydantic import BaseModel, Field
 
 from app.config import Settings
+from app.model import model_configuration
 from app.demo.generator import Dataset
 from app.demo.scenarios import advance, seed
 from app.persistence.mongo import connect, init_indexes
@@ -115,10 +116,10 @@ def create_api(settings=None, database=None, reasoners=None):
 
     @api.get("/health")
     async def health():
+        model = model_configuration(settings.model_name)
         return {"status": "ready" if api.state.db is not None else "configuration_required",
                 "mongodb_configured": api.state.db is not None,
-                "model_configured": bool(os.getenv("GOOGLE_API_KEY")) or reasoners is not None,
-                "model": settings.model_name}
+                **model, "model_configured": model["model_configured"] or reasoners is not None}
 
     @api.post("/demo/seed")
     async def seed_demo():

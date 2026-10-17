@@ -1,3 +1,5 @@
+import os
+
 from google.adk.agents import LlmAgent
 from google.genai import types
 
@@ -5,10 +7,15 @@ from app.model import gemini_model
 from app.prompts import DIAGNOSIS, EVOLUTION, MEMORY
 
 
-_GENERATION_CONFIG = types.GenerateContentConfig(
-    max_output_tokens=512,
-    thinking_config=types.ThinkingConfig(thinking_level="minimal"),
-)
+def generation_config():
+    if os.getenv("MODEL_PROVIDER", "gemini").lower() == "nicrron":
+        # Reasoning tokens share the completion budget on GPT-5 models.
+        # Gemini thinking_config is not forwarded by the LiteLLM adapter.
+        return types.GenerateContentConfig(max_output_tokens=4096)
+    return types.GenerateContentConfig(
+        max_output_tokens=512,
+        thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+    )
 
 
 def create_agents(model_name):
@@ -18,7 +25,7 @@ def create_agents(model_name):
                       # additional_properties field for these Pydantic schemas.
                       # Prompts request JSON; the workflow validates every result
                       # against the strict Pydantic model before using it.
-                      generate_content_config=_GENERATION_CONFIG,
+                      generate_content_config=generation_config(),
                       include_contents="none", mode="single_turn")
         for key, name, prompt in [
             ("diagnosis", "diagnosis_agent", DIAGNOSIS),

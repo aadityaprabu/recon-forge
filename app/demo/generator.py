@@ -3,7 +3,7 @@ import csv
 import json
 from pathlib import Path
 
-from app.schemas import Policy
+from app.policies import load_baseline
 
 
 class Dataset:
@@ -36,7 +36,7 @@ class Dataset:
     def baseline(self):
         # The newer business specification supersedes the dataset's global policy.
         # Preserve supplied files; start with zero tolerance on each processor.
-        return Policy(version="v1")
+        return load_baseline()
 
     def seed_memories(self):
         with (self.directory / "incident_memories.csv").open() as handle:

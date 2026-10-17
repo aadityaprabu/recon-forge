@@ -6,6 +6,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from app.persistence.repositories import Repository
+from app.policies import seed_policy
 
 
 async def seed(db, dataset):
@@ -31,10 +32,7 @@ async def seed(db, dataset):
         if pending:
             await db.ground_truth.insert_many(pending, ordered=False)
     base = dataset.baseline()
-    await db.harness_policies.update_one({"version": base.version}, {"$setOnInsert": {
-        "version": base.version, "status": "ACTIVE", "patch_name": "Zero-tolerance baseline",
-        "policy": base.model_dump(), "created_at": time.time()}}, upsert=True)
-    await db.control.update_one({"_id": "active_policy"}, {"$setOnInsert": {"policy": base.model_dump(), "operations": []}}, upsert=True)
+    await seed_policy(db, base)
     await db.control.update_one({"_id": "stream"}, {"$setOnInsert": {"position": 0, "total": 1500}}, upsert=True)
     await db.control.update_one({"_id": "engine"}, {"$setOnInsert": {"enabled": False, "interval_seconds": 15}}, upsert=True)
     for memory in dataset.seed_memories():

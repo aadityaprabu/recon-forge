@@ -35,7 +35,7 @@ Agents can propose changes only within the approved policy surface. Deterministi
 - [`uv`](https://docs.astral.sh/uv/)
 - Node.js 20 or newer with npm
 - MongoDB Atlas or another MongoDB deployment
-- `GEMINI_API_KEY` for workflows that call the diagnosis and evolution agents
+- `GOOGLE_API_KEY` for Gemini, or `NICRRON_API_KEY` for Nicrron agent workflows
 
 Dataset files are included in `ReconForge_Reconciliation_Dataset/`.
 
@@ -47,7 +47,7 @@ From the repository root, create your local environment file:
 cp .env.example .env
 ```
 
-Set `MONGODB_URI` and `MONGODB_DB` in `.env`. Set `GEMINI_API_KEY` to enable agent-powered upgrade workflows. Keep `.env` private; do not commit credentials.
+Set `MONGODB_URI` and `MONGODB_DB` in `.env`. For Gemini, set `MODEL_PROVIDER=gemini` and `GOOGLE_API_KEY`. For Nicrron, set `MODEL_PROVIDER=nicrron`, `NICRRON_API_KEY`, `NICRRON_BASE_URL=https://api.nicrron.ai/v1`, and `NICRRON_MODEL=openai/gpt-5-mini` to enable agent-powered upgrade workflows. Keep `.env` private; do not commit credentials.
 
 ## Run locally
 
@@ -75,6 +75,23 @@ Open the local URL printed by Vite, usually http://127.0.0.1:5173. The Vite serv
 
 ## Seed or repair demo data
 
+The runtime baseline lives in `app/policies/baseline.json`, separate from the
+original dataset policy. It is validated against `app.schemas.Policy` and seeded
+into MongoDB's `harness_policies` collection. The `control` document with
+`_id: active_policy` holds the current runtime policy. Existing records are
+preserved; changing an existing version's content is rejected. Use the normal
+backtest and approval workflow for subsequent policy changes. The local file
+remains the baseline, not an automatically updated copy of promoted policies.
+
+To initialize only the policy without importing transactions:
+
+```bash
+uv run python -m scripts.seed_policy
+```
+
+Matching invariants and promotion guardrails remain fixed in
+`app/tools/business.py` and `app/tools/guardrails.py`.
+
 If the dashboard says seed data is missing, first check the API terminal for MongoDB connection or dataset path errors. Then, from the repository root, run:
 
 ```bash
@@ -99,7 +116,7 @@ Then start the API from the repository root and open http://127.0.0.1:8000. Fast
 
 - **Overview:** stream health, evaluator metrics, upgrade trigger, workflow activity, and performance history.
 - **Backtesting:** current status, baseline-versus-candidate metrics, and the fixed backtest guardrails. Guardrails are read-only and cannot be changed by the agents.
-- **Patch evolution:** processor amount tolerance history and policy status.
+- **Patch evolution:** a selectable policy version timeline, active processor tolerances, parent comparisons, proposal rationale, backtest results, and full policy JSON.
 - **Human approval:** inspect eligible candidates and approve or reject a proposed change.
 - **Workflow:** execution stage, saved checkpoint, audit timeline, and persisted approval signals.
 - **Reconciliation:** match metrics, open break reasons, processor summary, and open cases.
