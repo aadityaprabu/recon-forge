@@ -141,12 +141,6 @@ FastAPI publishes interactive API documentation at http://127.0.0.1:8000/docs wh
 
 ## Development
 
-Run the Python test suite with:
-
-```bash
-uv run pytest
-```
-
 ADK discovery entry point: `app.agent:root_agent`.
 
 ## Evolution patch artifacts

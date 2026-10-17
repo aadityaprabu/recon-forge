@@ -16,11 +16,5 @@ dependencies = [
   "python-dotenv",
 ]
 
-[project.optional-dependencies]
-dev = ["pytest"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
