@@ -1,5 +1,9 @@
+from pymongo import UpdateOne
 import time
 import asyncio
+from datetime import datetime, timedelta, timezone
+from app.config import Settings
+from app.demo.generator import Dataset
 from collections import Counter, defaultdict
 
 from app.schemas import Policy
@@ -24,17 +28,25 @@ class AgentRepository:
 
 class EvaluatorRepository:
     """Only deterministic evaluation code receives this capability."""
-    def __init__(self, db):
+    def __init__(self, db, dataset=None):
         self.db = db
+        self.dataset = dataset or Dataset(Settings.from_env().dataset_dir)
+        self._corpora = {}
+        self._corpus_lock = asyncio.Lock()
 
     async def corpus(self, split="historical"):
-        query = {"dataset_split": split}
-        if split == "live":
-            held_out = await self.db.evaluation_corpora.find_one({"_id": "live"})
-            return held_out["internal"], held_out["settlements"], await rows(self.db.ground_truth, query)
-        return (await rows(self.db.internal_ledger, query),
-                await rows(self.db.processor_settlement, query),
-                await rows(self.db.ground_truth, query))
+        # Seeded evaluation corpora are immutable in a dataset-specific database.
+        # Avoid downloading thousands of rows for every scheduler tick/replay.
+        async with self._corpus_lock:
+            if split not in self._corpora:
+                self._corpora[split] = await self._load_corpus(split)
+            return self._corpora[split]
+
+    async def _load_corpus(self, split="historical"):
+        if split not in {"historical", "live"}:
+            raise ValueError("Unknown evaluation split")
+        internal, settlements = self.dataset.business(split)
+        return internal, settlements, self.dataset.load(f"{split}_ground_truth")
 
     async def current_live_metrics(self, policy, position):
         """Score only the ingested live prefix; ground truth stays evaluator-only."""
@@ -54,8 +66,9 @@ class EvaluatorRepository:
 
 
 class Repository:
-    def __init__(self, db):
+    def __init__(self, db, dataset=None):
         self.db = db
+        self.dataset = dataset or Dataset(Settings.from_env().dataset_dir)
         self.agent = AgentRepository(db.incident_memories)
 
     async def audit(self, run_id, action, payload=None, *, suffix="", actor="system"):
@@ -82,14 +95,13 @@ class Repository:
         policy = policy or await self.active_policy()
         cursor = await self.db.control.find_one({"_id": "stream"})
         end = (cursor or {}).get("position", 0)
-        query = {"dataset_split": "live", "stream_index": {"$lt": end}}
-        internal = await rows(self.db.internal_ledger, query)
-        settlements = await rows(self.db.processor_settlement, query)
+        internal, settlements = self.dataset.business("live")
+        internal, settlements = internal[:end], settlements[:end]
         result = match(internal, settlements, policy.matching)
         unresolved = {r["internal_record_id"]: r for r in result["cases"]}
         matched = {r["internal_record_id"]: r["processor_record_id"] for r in result["auto_matches"]}
         existing = {c["internal_record_id"]: c for c in await rows(self.db.reconciliation_cases)}
-        writes = []
+        case_writes, event_writes = [], []
         for row in internal:
             record_id = row["internal_record_id"]
             case = unresolved.get(record_id) or {
@@ -102,29 +114,40 @@ class Repository:
             case.update(case_id=f"CASE-{record_id}", policy_version=policy.version,
                         amount_cents=row["amount_cents"], currency=row["currency"], run_id=run_id,
                         trace_id=run_id, actor="matcher", updated_at=time.time())
-            writes.append(self.db.reconciliation_cases.update_one({"internal_record_id": record_id}, {"$set": case}, upsert=True))
-            if not prior or (prior["status"], prior["policy_version"]) != (case["status"], policy.version):
+            case_writes.append(UpdateOne({"internal_record_id": record_id}, {"$set": case}, upsert=True))
+            if not prior or prior["status"] != case["status"]:
                 key = f"{run_id}:{record_id}:{policy.version}:{case['status']}"
-                writes.append(self.db.case_events.update_one({"idempotency_key": key}, {"$setOnInsert": {
+                event_writes.append(UpdateOne({"idempotency_key": key}, {"$setOnInsert": {
                     "idempotency_key": key, "run_id": run_id, "trace_id": run_id, "actor": "matcher",
                     "internal_record_id": record_id, "status": case["status"], "policy_version": policy.version,
                     "timestamp": time.time()}}, upsert=True))
-        for start in range(0, len(writes), 100):
-            await asyncio.gather(*writes[start:start+100])
+        for collection, writes in ((self.db.reconciliation_cases, case_writes), (self.db.case_events, event_writes)):
+            for start in range(0, len(writes), 1000):
+                await collection.bulk_write(writes[start:start+1000], ordered=False)
         await self.db.metric_snapshots.update_one({"_id": f"{run_id}:{policy.version}:{end}"}, {"$set": {
             "run_id": run_id, "policy_version": policy.version, "position": end,
-            "timestamp": time.time(), **result["summary"]}}, upsert=True)
+            "timestamp": time.time(), "expires_at": datetime.now(timezone.utc) + timedelta(days=7), **result["summary"]}}, upsert=True)
         return result
 
     async def domain_metrics(self):
-        cases = await rows(self.db.reconciliation_cases)
+        # Aggregate in MongoDB instead of transferring every transaction each refresh.
+        cursor = await self.db.reconciliation_cases.aggregate([
+            {"$group": {"_id": {"currency": "$currency", "processor": "$processor",
+                                      "status": "$status", "break_type": "$break_type"},
+                         "count": {"$sum": 1}, "cents": {"$sum": "$amount_cents"}}}])
+        groups = await cursor.to_list(None)
         by_currency, by_processor = defaultdict(lambda: {"matched_cents": 0, "outstanding_cents": 0}), defaultdict(Counter)
-        for case in cases:
-            matched = case["status"] == "RESOLVED_AUTO"
-            by_currency[case["currency"]]["matched_cents" if matched else "outstanding_cents"] += case["amount_cents"]
-            by_processor[case["processor"]]["matched" if matched else "unresolved"] += 1
-        resolved = sum(c["status"] == "RESOLVED_AUTO" for c in cases)
-        return {"total": len(cases), "matched": resolved, "unresolved": len(cases)-resolved,
-                "match_rate": resolved / max(len(cases), 1), "by_currency": dict(by_currency),
-                "by_processor": dict(by_processor),
-                "break_buckets": dict(Counter(c["break_type"] for c in cases if c["status"] != "RESOLVED_AUTO"))}
+        buckets = Counter()
+        total = resolved = 0
+        for group in groups:
+            key, count = group["_id"], group["count"]
+            matched = key["status"] == "RESOLVED_AUTO"
+            total += count
+            resolved += count if matched else 0
+            by_currency[key["currency"]]["matched_cents" if matched else "outstanding_cents"] += group["cents"]
+            by_processor[key["processor"]]["matched" if matched else "unresolved"] += count
+            if not matched:
+                buckets[key["break_type"]] += count
+        return {"total": total, "matched": resolved, "unresolved": total-resolved,
+                "match_rate": resolved / max(total, 1), "by_currency": dict(by_currency),
+                "by_processor": dict(by_processor), "break_buckets": dict(buckets)}

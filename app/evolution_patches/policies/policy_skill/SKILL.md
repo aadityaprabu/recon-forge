@@ -1,7 +1,7 @@
 ---
 name: policy-update
 description: Propose a minimal reconciliation policy change using verified diagnosis and analysis.
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Policy Update Skill
@@ -33,6 +33,10 @@ more evidence instead of manufacturing an unsupported proposal.
    schema's stable processor ID; use the provider display name in explanations.
 4. Choose exactly one parameter on one processor. Use the smallest measured change
    supported by the incident. Do not bundle an amount, date, or fee change together.
+   The supplied incident list is ordered to prefer a different supported parameter
+   from the last completed evolution. Follow its selected first incident. Supported
+   mechanisms include amount tolerance, settlement windows, fixed fees and percentage
+   fees; never rotate to a parameter without measured evidence.
 5. Copy the current policy version as parent_version. Reject no-op or stale-parent edits.
 6. Explain how the diagnosis and analysis support this specific change, its expected
    benefit, the risk of false matches, and relevant evaluation slices. Reference

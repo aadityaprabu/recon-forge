@@ -2,6 +2,8 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
 import time
+from datetime import datetime, timedelta, timezone
+from app.demo.generator import Dataset
 from uuid import uuid4
 
 from google.adk.runners import Runner
@@ -25,15 +27,20 @@ class BusyError(ValueError):
 
 
 @asynccontextmanager
-async def engine_lease(db):
+async def engine_lease(db, wait_seconds=0, lease_name="engine_lease"):
     owner = str(uuid4())
-    try:
-        locked = await db.control.find_one_and_update({"_id": "engine_lease", "$or": [
-            {"expires_at": {"$lt": time.time()}}, {"owner": owner}]},
-            {"$set": {"owner": owner, "expires_at": time.time()+90}}, upsert=True,
-            return_document=ReturnDocument.AFTER)
-    except DuplicateKeyError:
-        raise BusyError("Evaluator is running; retry shortly") from None
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            locked = await db.control.find_one_and_update({"_id": lease_name, "$or": [
+                {"expires_at": {"$lt": time.time()}}, {"owner": owner}]},
+                {"$set": {"owner": owner, "expires_at": time.time()+90}}, upsert=True,
+                return_document=ReturnDocument.AFTER)
+            break
+        except DuplicateKeyError:
+            if time.monotonic() >= deadline:
+                raise BusyError("Evaluator is running; retry shortly") from None
+            await asyncio.sleep(0.25)
 
     caller = asyncio.current_task()
 
@@ -41,7 +48,7 @@ async def engine_lease(db):
         while True:
             await asyncio.sleep(20)
             try:
-                result = await db.control.update_one({"_id": "engine_lease", "owner": owner},
+                result = await db.control.update_one({"_id": lease_name, "owner": owner},
                     {"$set": {"expires_at": time.time()+90}})
                 if not result.matched_count:
                     caller.cancel()
@@ -57,15 +64,15 @@ async def engine_lease(db):
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
-        await db.control.delete_one({"_id": "engine_lease", "owner": owner})
+        await db.control.delete_one({"_id": lease_name, "owner": owner})
 
 
 class Controller:
     def __init__(self, db, settings, reasoners=None):
         self.db = db
         self.settings = settings
-        self.repo = Repository(db)
-        self.evaluator = EvaluatorRepository(db)
+        self.repo = Repository(db, dataset=Dataset(settings.dataset_dir))
+        self.evaluator = EvaluatorRepository(db, dataset=self.repo.dataset)
         self.sessions = MongoSessionService(db)
         self.reasoners = reasoners
 
@@ -130,9 +137,15 @@ class Controller:
                 "status": "ERROR", "error": details["type"], "error_details": details,
                 "updated_at": time.time()}})
             raise
+        finished = await self.repo.run(run_id)
+        if finished["status"] in TERMINAL:
+            expiry = datetime.now(timezone.utc) + timedelta(days=7)
+            key = {"app_name": "reconforge", "user_id": run["user_id"], "session_id": run["session_id"]}
+            await self.db.adk_sessions.update_one(key, {"$set": {"expires_at": expiry}})
+            await self.db.adk_events.update_many(key, {"$set": {"expires_at": expiry}})
 
     async def approve(self, run_id, decision, actor="demo-user"):
-        async with engine_lease(self.db):
+        async with engine_lease(self.db, wait_seconds=5, lease_name=f"approval:{run_id}"):
             run = await self.repo.run(run_id)
             if not run:
                 raise ValueError("Unknown run")
@@ -161,7 +174,9 @@ class Controller:
             await self.db.doorbell_events.update_one({"event_id": event_id}, {"$setOnInsert": {
                 "event_id": event_id, "run_id": run_id, "kind": "APPROVAL", "decision": decision,
                 "consumed": False, "timestamp": time.time()}}, upsert=True)
-            return await self._resume(run_id)
+            await self.db.workflow_runs.update_one({"run_id": run_id}, {"$set": {
+                "approval_decision": decision, "decision_recorded_at": time.time()}})
+            return await self.repo.run(run_id)
 
     async def resume(self, run_id):
         async with engine_lease(self.db):
@@ -172,7 +187,7 @@ class Controller:
         if not run:
             raise ValueError("Unknown run")
         if run["status"] in TERMINAL:
-            await self.db.doorbell_events.update_many({"run_id": run_id}, {"$set": {"consumed": True}})
+            await self.db.doorbell_events.update_many({"run_id": run_id}, {"$set": {"consumed": True, "expires_at": datetime.now(timezone.utc) + timedelta(days=7)}})
             return run
         session = await self.sessions.get_session(app_name="reconforge", user_id=run["user_id"], session_id=run["session_id"])
         # Recover metadata if the process died after committing an ADK event but before indexing it.
@@ -209,11 +224,14 @@ class Controller:
             message = types.Content(role="user", parts=[types.Part(text="Evaluate reconciliation.")])
         await self._execute(run_id, self.runner(policy_skill=run.get("policy_skill")), message)
         await self.db.doorbell_events.update_many({"run_id": run_id, "consumed": False},
-                                                 {"$set": {"consumed": True, "consumed_at": time.time()}})
+                                                 {"$set": {"consumed": True, "consumed_at": time.time(), "expires_at": datetime.now(timezone.utc) + timedelta(days=7)}})
         return await self.repo.run(run_id)
 
     async def tick(self):
         async with engine_lease(self.db):
+            pending = await self.db.workflow_runs.find_one({"status": "WAITING_APPROVAL"})
+            if pending and await self.db.human_approvals.find_one({"run_id": pending["run_id"]}):
+                return await self._resume(pending["run_id"])
             policy = await self.repo.active_policy()
             cursor = await self.db.control.find_one({"_id": "stream"})
             # Reconciliation keeps processing new data while an upgrade waits for approval.
@@ -231,7 +249,8 @@ class Controller:
             decision = "REQUEST_UPGRADE" if evolution_triggered else "MANUAL_REVIEW_REQUIRED" if accuracy_triggered else "KEEP_CURRENT_PATCH"
             await self.db.evaluator_decisions.update_one({"_id": f"{cursor['position']}:{policy.version}"}, {"$set": {
                 "timestamp": time.time(), "position": cursor["position"], "policy_version": policy.version,
-                "active_policy": policy.model_dump(), "decision": decision, "incidents": incidents,
+                "expires_at": datetime.now(timezone.utc) + timedelta(days=7),
+                "decision": decision, "incidents": incidents,
                 "summary": measured["summary"], "current_metrics": current_evaluation["metrics"],
                 "current_score": current_evaluation["metrics"]["score"],
                 "current_operational": current_evaluation["operational"],

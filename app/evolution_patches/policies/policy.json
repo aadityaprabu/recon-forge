@@ -1,6 +1,6 @@
 {
-  "version": "v4.1-four-processor-baseline",
-  "parent": null,
+  "version": "v4.2-explicit-processor-baseline",
+  "parent": "v4.1-four-processor-baseline",
   "amount_matching": {
     "absolute_tolerance_cents": 0,
     "relative_tolerance_bps": 0,
@@ -37,10 +37,58 @@
     "python_patch": null
   },
   "processor_overrides": {
-    "PROC_A": {},
-    "PROC_B": {},
-    "PROC_C": {},
-    "PROC_D": {}
+    "PROC_A": {
+      "amount_matching": {
+        "absolute_tolerance_cents": 0
+      },
+      "settlement": {
+        "window_business_days": 2,
+        "weekend_grace_days": 0
+      },
+      "fees": {
+        "fixed_fee_cents": 0,
+        "percentage_bps": 0
+      }
+    },
+    "PROC_B": {
+      "amount_matching": {
+        "absolute_tolerance_cents": 0
+      },
+      "settlement": {
+        "window_business_days": 2,
+        "weekend_grace_days": 0
+      },
+      "fees": {
+        "fixed_fee_cents": 0,
+        "percentage_bps": 0
+      }
+    },
+    "PROC_C": {
+      "amount_matching": {
+        "absolute_tolerance_cents": 0
+      },
+      "settlement": {
+        "window_business_days": 2,
+        "weekend_grace_days": 0
+      },
+      "fees": {
+        "fixed_fee_cents": 0,
+        "percentage_bps": 0
+      }
+    },
+    "PROC_D": {
+      "amount_matching": {
+        "absolute_tolerance_cents": 0
+      },
+      "settlement": {
+        "window_business_days": 2,
+        "weekend_grace_days": 0
+      },
+      "fees": {
+        "fixed_fee_cents": 0,
+        "percentage_bps": 0
+      }
+    }
   },
   "retrieval": {
     "memory_top_k": 5

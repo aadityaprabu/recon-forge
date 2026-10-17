@@ -43,7 +43,7 @@ The expanded [5,000-record demo](docs/scale5000.md) is included in
 `ReconForge_Scale5000_Dataset/`. It supports ten sequential single-field policy
 evolutions across amounts, dates, fixed fees, and percentage fees, with fixed guardrails and an approval checkpoint between phases.
 Set `DATASET_DIR=ReconForge_Scale5000_Dataset` and use a fresh
-`MONGODB_DB=reconforge_policy_skill_demo` to run it separately from the original demo.
+`MONGODB_DB=reconforge_long_horizon` to run it separately from the original demo.
 
 ## Configure
 
@@ -155,3 +155,5 @@ to 70%; hard reference cases remain unresolved. See [the three active agents](do
 
 The Evolution agent uses the [Policy Update Skill](app/evolution_patches/policies/policy_skill/SKILL.md) and
 [policy rules](app/evolution_patches/policies/policy_skill/rules.json), together with diagnosis and analysis.
+
+Storage and retention: see [docs/storage.md](docs/storage.md). Local fixtures supply evaluation and streaming data; MongoDB retains durable evolution state and short-lived operational telemetry.

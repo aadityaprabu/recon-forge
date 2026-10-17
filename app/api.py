@@ -55,20 +55,23 @@ def create_api(settings=None, database=None, reasoners=None):
             await seed(db, dataset)
             await db.control.update_one({"_id": "engine"}, {"$set": {
                 "enabled": True, "interval_seconds": 1,
-                "batch_size": dataset.manifest.get("stream_batch_size", 3)}}, upsert=True)
+                "batch_size": 10, "ingestion_interval_seconds": 5}}, upsert=True)
 
-        async def scheduler():
+        async def scheduler(ingest=False):
             while True:
-                await asyncio.sleep(1)
+                ingestion = await db.control.find_one({"_id": "engine"}) if ingest and db is not None else {}
+                await asyncio.sleep(max(1, (ingestion or {}).get("ingestion_interval_seconds", 5)) if ingest else 1)
                 if db is None:
                     continue
                 try:
                     stream = await db.control.find_one({"_id": "stream"})
                     if not stream:
                         continue
-                    if stream["position"] < stream["total"]:
-                        await advance(db, dataset, dataset.manifest.get("stream_batch_size", 3))
-                    # Ingest first so each evaluator tick sees the latest committed batch.
+                    if ingest:
+                        if stream["position"] < stream["total"]:
+                            await advance(db, dataset, max(1, min(5000, (ingestion or {}).get("batch_size", 10))))
+                        continue
+                    # Evaluation and ingestion have independent tasks and leases.
                     result = await api.state.controller.tick()
                     if isinstance(result, dict) and result.get("status") in {"WAITING_APPROVAL", "COMPLETED"}:
                         # A recovered workflow clears the transient banner; its
@@ -87,13 +90,13 @@ def create_api(settings=None, database=None, reasoners=None):
                     await db.control.update_one({"_id": "engine"}, {"$set": {
                         "last_error": type(exc).__name__, "last_error_details": error_details(exc),
                         "last_error_at": time.time()}}, upsert=True)
-        task = asyncio.create_task(scheduler())
+        tasks = [asyncio.create_task(scheduler(ingest=True)), asyncio.create_task(scheduler())]
         try:
             yield
         finally:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             if client:
                 await client.close()
 
@@ -189,18 +192,24 @@ def create_api(settings=None, database=None, reasoners=None):
     async def dashboard():
         db = database_ready()
         repo = Repository(db)
-        active = await db.control.find_one({"_id": "active_policy"}, {"_id": 0})
+        (active, runs, evaluations, snapshots, decisions, sessions, policies,
+         stream, engine, domain, memories, doorbells, cases) = await asyncio.gather(
+            db.control.find_one({"_id": "active_policy"}, {"_id": 0}),
+            db.workflow_runs.find({}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(None),
+            db.policy_evaluations.find({}, {"_id": 0}).sort("created_at", 1).to_list(None),
+            db.metric_snapshots.find({}, {"_id": 0}).sort("timestamp", -1).limit(200).to_list(None),
+            db.evaluator_decisions.find({}, {"_id": 0}).sort("timestamp", -1).limit(50).to_list(None),
+            db.adk_sessions.find({}, {"_id": 0, "session_id": 1, "last_event_seq": 1, "last_invocation_id": 1}).to_list(None),
+            rows(db.harness_policies),
+            db.control.find_one({"_id": "stream"}, {"_id": 0}),
+            db.control.find_one({"_id": "engine"}, {"_id": 0}),
+            repo.domain_metrics(), rows(db.incident_memories, {"verified": True}),
+            db.doorbell_events.find({}, {"_id": 0}).sort("timestamp", -1).limit(50).to_list(None),
+            db.reconciliation_cases.find({"status": {"$ne": "RESOLVED_AUTO"}}, {"_id": 0}).limit(200).to_list(None))
         active_policy = active.get("policy") if active else None
-        active_patch = await db.harness_policies.find_one(
-            {"version": active_policy["version"]}, {"_id": 0, "patch_name": 1}) if active_policy else None
-        runs = await db.workflow_runs.find({}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(None)
-        evaluations = await db.policy_evaluations.find({}, {"_id": 0}).sort("created_at", 1).to_list(None)
-        snapshots = await db.metric_snapshots.find({}, {"_id": 0}).sort("timestamp", -1).limit(200).to_list(None)
-        decisions = await db.evaluator_decisions.find({}, {"_id": 0}).sort("timestamp", -1).limit(50).to_list(None)
+        active_patch = next((p for p in policies if p["version"] == (active_policy or {}).get("version")), None)
         current_evaluation = next((item for item in decisions
                                    if active_policy and item.get("policy_version") == active_policy["version"]), None)
-        sessions = await db.adk_sessions.find({}, {"_id": 0, "session_id": 1, "last_event_seq": 1, "last_invocation_id": 1}).to_list(None)
-        policies = await rows(db.harness_policies)
         policy_history = [{"version": p["version"], "name": p.get("patch_name", p["version"]),
                            **p["benchmark"]} for p in sorted(policies, key=lambda p: p.get("created_at", 0))
                           if p.get("benchmark") and (p["version"] == (active_policy or {}).get("version")
@@ -212,17 +221,17 @@ def create_api(settings=None, database=None, reasoners=None):
                     {"name": "Analysis", "stage": "analysis", "role": "Check measured evidence, risks, and verified memories."},
                     {"name": "Evolution", "stage": "upgrade", "role": "Use the Policy Update Skill, diagnosis, and analysis to propose one bounded policy change."}],
                 "active_patch_name": (active_patch or {}).get("patch_name", "Zero-tolerance baseline" if active_policy and active_policy["version"] == "v1" else (active_policy or {}).get("version")),
-                "stream": await db.control.find_one({"_id": "stream"}, {"_id": 0}) or {"position": 0, "total": dataset.live_total},
-                "engine": await db.control.find_one({"_id": "engine"}, {"_id": 0}) or {},
-                "runs": runs, "evaluations": evaluations, "domain": await repo.domain_metrics(),
+                "stream": stream or {"position": 0, "total": dataset.live_total},
+                "engine": engine or {},
+                "runs": runs, "evaluations": evaluations, "domain": domain,
                 "snapshots": list(reversed(snapshots)), "sessions": sessions,
                 "policies": policies,
-                "memories": await rows(db.incident_memories, {"verified": True}),
-                "doorbells": await db.doorbell_events.find({}, {"_id": 0}).sort("timestamp", -1).limit(50).to_list(None),
+                "memories": memories,
+                "doorbells": doorbells,
                 "checks": snapshots[0].get("check_counts", {}) if snapshots else {},
                 "decisions": decisions,
                 "current_evaluation": current_evaluation,
-                "cases": await db.reconciliation_cases.find({"status": {"$ne": "RESOLVED_AUTO"}}, {"_id": 0}).limit(200).to_list(None)}
+                "cases": cases}
 
     frontend_dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
     if (frontend_dist / "assets").is_dir():

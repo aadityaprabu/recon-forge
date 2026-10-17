@@ -1,4 +1,4 @@
-"""Reproducible 5,000-record stream with ten sequential single-leaf patches."""
+"""Reproducible 25,000-record stream with ten sequential single-leaf patches."""
 import csv
 from datetime import datetime, timedelta
 import json
@@ -9,15 +9,15 @@ SEED = 5000
 PROCESSORS = ("PROC_A", "PROC_B", "PROC_C", "PROC_D")
 PHASES = [
     ("PROC_A", "amount_tolerance_cents", 1),
-    ("PROC_B", "amount_tolerance_cents", 2),
-    ("PROC_C", "amount_tolerance_cents", 3),
     ("PROC_D", "settlement_window_days", 3),
-    ("PROC_A", "settlement_window_days", 4),
-    ("PROC_B", "settlement_window_days", 5),
     ("PROC_C", "fixed_fee_cents", 31),
-    ("PROC_D", "fixed_fee_cents", 43),
-    ("PROC_A", "fixed_fee_cents", 59),
     ("PROC_B", "fee_bps", 125),
+    ("PROC_B", "amount_tolerance_cents", 2),
+    ("PROC_A", "settlement_window_days", 4),
+    ("PROC_D", "fixed_fee_cents", 43),
+    ("PROC_C", "amount_tolerance_cents", 3),
+    ("PROC_B", "settlement_window_days", 5),
+    ("PROC_A", "fixed_fee_cents", 59),
 ]
 
 
@@ -32,10 +32,11 @@ def add_business_days(moment, days):
 def generate_split(split):
     rng = random.Random(SEED + (split == "live"))
     ledger, settlements, truth = [], [], []
-    total = 5000 if split == "live" else 8000
+    total = 25000 if split == "live" else 8000
     for i in range(total):
         if split == "live":
             phase, offset = divmod(i, 500)
+            phase %= len(PHASES)
             kind = "drift" if offset % 10 < 5 else "exact" if offset % 10 < 6 else "hard" if offset % 10 < 9 else "negative"
         else:
             phase, offset = divmod(i, 400)
@@ -44,7 +45,8 @@ def generate_split(split):
         processor, patch_field, value = PHASES[phase]
         if kind != "drift":
             processor = rng.choice(PROCESSORS)
-        moment = datetime(2026, 10, 1) + timedelta(minutes=i)
+        # Independent timestamps span weekends and month/year boundaries.
+        moment = datetime(2026, 10, 1) + timedelta(days=rng.randrange(120), minutes=rng.randrange(1440))
         ref = str((700000 if split == "live" else 100000) + i)
         row = {"internal_record_id": f"INT-SCALE-{split}-{i:05d}",
                "event_time": moment.isoformat(), "merchant_id": f"MRC_{rng.randrange(1, 20):03d}",
@@ -66,7 +68,11 @@ def generate_split(split):
             elif patch_field == "fee_bps":
                 # Exact monetary arithmetic and a range of gross amounts make
                 # the proportional fee identifiable from evidence, not labels.
-                row["amount_cents"] = rng.randrange(1, 151) * 10000
+                row["amount_cents"] = rng.randrange(10000, 1500000)
+                # Avoid tie rounding so evidence identifies the same fee rate
+                # under both supported monetary rounding conventions.
+                while row["amount_cents"] * value % 10000 == 5000:
+                    row["amount_cents"] += 1
                 settlement["amount_cents"] = row["amount_cents"] - (row["amount_cents"] * value + 5000) // 10000
             else:
                 settlement["amount_cents"] -= value
@@ -74,9 +80,14 @@ def generate_split(split):
         elif kind == "hard":
             # Real matches requiring future reference-recovery capabilities.
             # Policy amounts/dates/fees cannot repair these strings.
-            if i % 2:
+            if i % 4 == 1:
                 settlement["reference"] = f"BANK-REF-{ref[:2]}X{ref[3:]}"
                 pattern = "reference_typo_requires_fuzzy"
+            elif i % 4 == 3:
+                settlement["reference"] = f"BANK-{ref[:2]}{ref[3]}{ref[2]}{ref[4:]}"
+                if ref[2] == ref[3]:
+                    settlement["reference"] += "X"
+                pattern = "transposed_reference_requires_fuzzy"
             else:
                 settlement["reference"] = f"REF-{ref[-4:]}"
                 pattern = "truncated_reference_requires_recovery"
@@ -131,15 +142,15 @@ def write_dataset(directory):
                 writer = csv.DictWriter(handle, fieldnames=list(records[0]), lineterminator="\n")
                 writer.writeheader()
                 writer.writerows(records)
-    manifest = {"project": "ReconForge", "dataset_id": "scale5000-four-processors-v6", "seed": SEED,
-                "historical_base_pairs": 8000, "live_base_pairs": 5000,
+    manifest = {"project": "ReconForge", "dataset_id": "scale5000-varied-v8", "seed": SEED,
+                "historical_base_pairs": 8000, "live_base_pairs": 25000,
                 "baseline_policy_file": "policies/policy.json",
-                "preserve_live_order": True, "phase_size": 500, "phase_count": 10,
-                "pause_between_phases": True, "stream_batch_size": 25,
-                "description": "Ten 500-pair phases: 250 policy drift, 50 exact, 150 hard reference matches, 50 invalid per phase. "
+                "preserve_live_order": True, "phase_size": 500, "phase_count": 50, "expected_evolutions": 10,
+                "pause_between_phases": False, "stream_batch_size": 25,
+                "description": "Fifty 500-pair batches repeating ten drift types: 250 policy drift, 50 exact, 150 hard reference matches, 50 invalid per phase. "
                                "Ten single-field policy changes across amounts, settlement windows, fixed fees and percentage fees. "
                                "Fixed benchmark accuracy: 20%, 25%, ..., 70%; 30% reference-recovery cases remain unresolved. "
-                               "Includes duplicate-allocation ambiguity controls. "
+                               "Includes randomized dates across 120 days, weekends, month/year boundaries, variable fee amounts, transposed references and duplicate-allocation ambiguity controls. "
                                "Requires human approval for each promoted version."}
     (directory / "dataset_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     with (directory / "incident_memories.csv").open("w", newline="") as handle:

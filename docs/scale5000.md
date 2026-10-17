@@ -3,7 +3,7 @@
 The fixture contains 5,000 ordered live ledger/settlement pairs and 8,000
 independent historical pairs. JSON and CSV exports are generated from
 `app/demo/scale_dataset.py` with seed 5000. Its dataset ID is
-`scale5000-four-processors-v6`.
+`scale5000-varied-v8`.
 
 Each 500-pair live phase contains 250 cases of a new policy drift, 50 ordinary
 true matches, 150 hard true reference matches, and 50 negative controls.
@@ -63,7 +63,7 @@ uv run python -m scripts.verify_scale_demo
 Configure a fresh database in the private `.env`:
 
 ```dotenv
-MONGODB_DB=reconforge_policy_skill_demo
+MONGODB_DB=reconforge_long_horizon
 DATASET_DIR=ReconForge_Scale5000_Dataset
 ```
 
@@ -80,3 +80,15 @@ from measured unresolved true matches, not an artificial score multiplier.
 
 Processor labels are Stripe, Adyen, PayPal, and Square; all transactions remain synthetic.
 The later Python/fuzzy stage targets 70% → 93% but is on hold and not yet validated.
+
+The varied-v8 fixture distributes transactions over 120 days, including weekends and month/year boundaries, uses varied gross amounts for percentage fees, and includes transposed references alongside typos, truncations, identity mismatches and allocation ambiguity. It retains 5,000 live pairs and the ten measured single-field policy improvements. Reference recovery remains deferred to the Python/fuzzy stage.
+
+Ingestion continues across phase boundaries while policy promotion requires human approval. The scheduler leaves the evaluator lease available while awaiting that decision; immutable evaluation corpora are cached after the first load to reduce repeated MongoDB transfers.
+
+Ingestion runs in its own asynchronous task, independently of the agent/evaluator task. Batches continue during active workflows and while candidates await approval, until all records have been ingested. The promotion indicator follows persisted workflow stages rather than elapsed-time estimates.
+
+Varied-v8 interleaves tolerance, settlement window, fixed fee and percentage fee drift. Incident detection separates these monetary mechanisms within each processor, so accumulated records do not hide one type behind another. After a completed evolution, the next workflow prefers a different supported parameter. This ordering never creates a change without observed evidence.
+
+The live stream has been extended to 25,000 pairs, preserving its original 5,000-pair prefix. The historical benchmark remains 8,000 independent pairs and ten expected rule improvements; 50 ingestion batches of 500 records repeat the ten drift types. Exact historical gains remain five percentage points. The larger held-out live sample can have tiny incidental differences; report measured results rather than rounding them into targets. The existing database cursor and policy/approval history are preserved during the extension.
+
+Approval displays current ingested-prefix accuracy for the active policy separately from active/candidate historical backtest accuracy. Backtested candidate gains are not active gains until human approval and successful replay.
