@@ -1,159 +1,109 @@
 # ReconForge
 
-ReconForge is a persistent reconciliation demo. Deterministic matching and evaluation identify recurring breaks; bounded agents can propose policy changes; fixed guardrails and a human decision control promotion.
+ReconForge demonstrates governed policy evolution for transaction reconciliation. It matches internal ledger records to processor settlements, diagnoses recurring breaks, and proposes small policy updates. Independent evaluation and human approval control which changes become active.
 
-Checkout our demo here!
-https://drive.google.com/file/d/1qeRYCI3H9UTcMZwWcujwjt64Nk5U12nX/view?usp=drive_link
+## Three-minute video demo
 
-## High-Level Architecture
+[![Watch the ReconForge demo](artifacts/screenshots/01-dashboard-slide.png)](reconforge-demo-3min.mp4)
 
-![High-Level Architecture](images/high-level-architecture.png)
+**[Watch or download the narrated video — 3:00](reconforge-demo-3min.mp4)**
 
-The diagram gives a high-level view of the API, workflow, deterministic tools, and MongoDB persistence. The frontend has since migrated from Streamlit to React: Vite serves it during development, and FastAPI can serve the production build.
+The video includes the dashboard, human approval, backtesting, policy versions, parameter changes, and measured accuracy improvements. It uses the real application UI, English synthetic narration, and an embedded English subtitle track. The recorded run shows approved historical benchmark accuracy increasing from **20% to 40%**, with a **45% candidate awaiting approval**. These are synthetic demo results, not production performance claims.
 
-## End-to-End Architecture
+- [Narration audio](reconforge-narration-3min.m4a)
+- [Narration transcript](artifacts/demo/narration.txt)
+- [Subtitle file](artifacts/demo/reconforge-demo-3min.srt)
 
-![End-to-End Architecture](images/end-to-end-architecture.png)
+## How it works
 
-Transactions move through deterministic reconciliation, agent diagnosis and evolution, independent evaluation, and human approval. MongoDB stores business data, policy versions, checkpoints, evaluations, and approvals.
+1. **Reconcile:** deterministic rules compare transaction identity, references, amounts, dates, and allocation.
+2. **Diagnose:** an agent identifies a recurring failure and its likely cause.
+3. **Analyse:** an agent reviews evidence, risks, and verified memories.
+4. **Evolve:** an agent consults the policy skill and rules to propose one supported parameter change.
+5. **Backtest:** an independent evaluator measures the candidate against the current policy and checks fixed guardrails.
+6. **Approve:** an operator reviews a red/green diff, line numbers, current live accuracy, and active/candidate backtest accuracy.
+7. **Promote and verify:** the saved decision resumes the workflow in the background. The UI tracks policy promotion, held-out replay, memory save, and completion. Failed verification can trigger rollback.
 
-## End-to-End Workflow
+Ingestion runs independently of agent execution and human approval. The default pace is **10 records every five seconds**. Approval confirmation stays tied to its workflow rather than disappearing when a newer candidate appears.
 
-![End-to-End Workflow](images/end-to-end-workflow.png)
+## Policies and dataset
 
-The workflow can pause at human approval and resume from its persisted checkpoint when a decision arrives. After promotion, the candidate is replayed against open cases and monitored.
+The synthetic live stream contains **25,000 transaction pairs**; the separate historical benchmark contains **8,000 pairs**. The existing dataset directory retains its original name: `ReconForge_Scale5000_Dataset/`.
 
-## Bounded Self-Evolution
+Four processor labels—**Stripe, Adyen, PayPal, and Square**—have explicit policy parameters. They are demonstration labels, not connections to those payment services.
 
-![Bounded Self-Evolution](images/bounded-self-evolution.png)
+Supported evolution parameters include amount tolerance, settlement windows, fixed fees, and percentage fees. Each proposal changes one field on one processor. Dataset scenarios interleave these failure types and include reference errors, identity mismatches, weekend/date boundaries, and duplicate allocation ambiguity. Evidence-based incident selection prefers a different supported parameter after a completed update.
 
-Agents can propose changes only within the approved policy surface. Deterministic backtesting and fixed guardrails evaluate each candidate, and a human must approve it before promotion.
+Offline validation checks ten single-field improvements on the fixed historical benchmark, from **20% to 70%** in five-point steps. This does not mean ten approvals have happened in the running app. Live-prefix accuracy can fluctuate as new records arrive, and candidate gains remain unapproved until the operator acts. Python code and fuzzy-reference evolution are **on hold**.
 
-## Requirements
+| File | Purpose |
+| --- | --- |
+| [policy.json](app/evolution_patches/policies/policy.json) | Local baseline with explicit processor settings |
+| [Policy Update Skill](app/evolution_patches/policies/policy_skill/SKILL.md) | Evidence-driven proposal procedure |
+| [rules.json](app/evolution_patches/policies/policy_skill/rules.json) | Allowed parameters, paths, and bounds |
+| [Dataset documentation](docs/scale5000.md) | Scenario generation and validation |
+| [Validation results](docs/scale5000_validation.json) | Measured offline evolution results |
 
-- Python 3.11 or newer
-- [`uv`](https://docs.astral.sh/uv/)
-- Node.js 20 or newer with npm
-- MongoDB Atlas or another MongoDB deployment
-- `GOOGLE_API_KEY` for Gemini, or `NICRRON_API_KEY` for Nicrron agent workflows
-
-Dataset files are included in `ReconForge_Reconciliation_Dataset/`.
-
-The expanded [5,000-record demo](docs/scale5000.md) is included in
-`ReconForge_Scale5000_Dataset/`. It supports ten sequential single-field policy
-evolutions across amounts, dates, fixed fees, and percentage fees, with fixed guardrails and an approval checkpoint between phases.
-Set `DATASET_DIR=ReconForge_Scale5000_Dataset` and use a fresh
-`MONGODB_DB=reconforge_long_horizon` to run it separately from the original demo.
-
-## Configure
-
-From the repository root, create your local environment file:
-
-```bash
-cp .env.example .env
-```
-
-Set `MONGODB_URI` and `MONGODB_DB` in `.env`. For Gemini, set `MODEL_PROVIDER=gemini` and `GOOGLE_API_KEY`. For Nicrron, set `MODEL_PROVIDER=nicrron`, `NICRRON_API_KEY`, `NICRRON_BASE_URL=https://api.nicrron.ai/v1`, and `NICRRON_MODEL=openai/gpt-5-mini` to enable agent-powered upgrade workflows. Keep `.env` private; do not commit credentials.
+The local policy remains the baseline. Promoted policies and their parent versions are maintained in MongoDB.
 
 ## Run locally
 
-Install the Python dependencies:
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), Node.js 20+, npm, and MongoDB. Agent workflows require a Gemini or Nicrron API key.
 
 ```bash
+cp .env.example .env
 uv sync
 ```
 
-In one terminal, start the API:
+Configure the following in `.env`, keeping credentials private:
 
-```bash
-uv run uvicorn app.api:app --reload
+```dotenv
+MONGODB_URI=<your-mongodb-uri>
+MONGODB_DB=reconforge_long_horizon
+DATASET_DIR=ReconForge_Scale5000_Dataset
+MODEL_PROVIDER=nicrron
+NICRRON_API_KEY=<your-api-key>
+NICRRON_BASE_URL=https://api.nicrron.ai/v1
+NICRRON_MODEL=openai/gpt-5-mini
 ```
 
-In a second terminal, start the React development server:
+For Gemini, use `MODEL_PROVIDER=gemini` and set `GOOGLE_API_KEY` instead.
+
+Build the frontend, then start the API from the repository root:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+npm --prefix frontend ci
+npm --prefix frontend run build
+uv run uvicorn app.api:app --host 127.0.0.1 --port 8001
 ```
 
-Open the local URL printed by Vite, usually http://127.0.0.1:5173. The Vite server proxies API requests to `http://127.0.0.1:8000`. On API startup, ReconForge loads the demo dataset and baseline policy into the configured database.
+Open **http://127.0.0.1:8001**. API documentation is at **http://127.0.0.1:8001/docs**. Startup initializes the baseline and stream state without copying the raw fixture dataset into MongoDB. Use a fresh database for a different dataset; existing policy versions are immutable.
 
-## Seed or repair demo data
+For frontend development, run the API on port 8000 and run `npm run dev` inside `frontend/`. Vite proxies API requests to port 8000.
 
-The runtime baseline lives in `app/evolution_patches/policies/policy.json`, separate from the
-original dataset policy. It is validated against `app.schemas.Policy` and seeded
-into MongoDB's `harness_policies` collection. The `control` document with
-`_id: active_policy` holds the current runtime policy. Existing records are
-preserved; changing an existing version's content is rejected. Use the normal
-backtest and approval workflow for subsequent policy changes. The local file
-remains the baseline, not an automatically updated copy of promoted policies.
+## Storage and recovery
 
-To initialize only the policy without importing transactions:
+MongoDB retains policy versions, workflow outcomes, approvals, evaluation results, verified memories, reconciliation results, and audit records. Pending workflow checkpoints and unconsumed signals remain available for recovery. Routine telemetry and completed execution traces expire after seven days.
 
-```bash
-uv run python -m scripts.seed_policy
-```
+Raw ledger fixtures, settlements, and evaluation labels remain local. A dataset fingerprint prevents accidental fixture changes in an existing database. Preserve the dataset files for reproducible replay. See [storage and retention](docs/storage.md).
 
-Matching invariants and promotion guardrails remain fixed in
-`app/tools/business.py` and `app/tools/guardrails.py`.
+## Evaluation safeguards
 
-If the dashboard says seed data is missing, first check the API terminal for MongoDB connection or dataset path errors. Then, from the repository root, run:
+Candidates must satisfy fixed checks, including a minimum 1,000-record sample, bounded false-match rates, no regressions of previously correct matches, no high-value false matches, and a minimum three-point improvement in correct auto-resolution. Agents cannot edit these safeguards. Implementation: [business checks](app/tools/business.py), [guardrails](app/tools/guardrails.py).
 
-```bash
-uv run python scripts/seed_demo.py
-```
+Useful endpoints:
 
-The script is safe to rerun: it inserts missing demo records and the baseline policy without clearing existing data. The Overview page also displays a **Seed demo data** button when the baseline policy is missing.
+- `GET /health` — configuration and server status
+- `GET /dashboard` — dashboard state
+- `POST /demo/seed` — idempotent initialization
+- `POST /runs/start` — start an evaluation workflow
+- `POST /runs/{run_id}/approval` — record an approval or rejection
+- `GET /runs/{run_id}` — follow processing after the decision is saved
 
-## Build and serve the UI
+## Architecture references
 
-Build the React app:
+[Agent details](docs/agents.md) · [Evolution artifacts](app/evolution_patches/README.md)
 
-```bash
-cd frontend
-npm install
-npm run build
-```
+![High-level architecture](images/high-level-architecture.png)
 
-Then start the API from the repository root and open http://127.0.0.1:8000. FastAPI serves the built frontend from `frontend/dist` when that directory exists.
-
-## Dashboard sections
-
-- **Overview:** stream health, evaluator metrics, upgrade trigger, workflow activity, and performance history.
-- **Backtesting:** current status, baseline-versus-candidate metrics, and the fixed backtest guardrails. Guardrails are read-only and cannot be changed by the agents.
-- **Patch evolution:** a selectable policy version timeline, active processor tolerances, parent comparisons, proposal rationale, backtest results, and full policy JSON.
-- **Human approval:** inspect eligible candidates and approve or reject a proposed change.
-- **Workflow:** execution stage, saved checkpoint, audit timeline, and persisted approval signals.
-- **Reconciliation:** match metrics, open break reasons, processor summary, and open cases.
-
-Backtest eligibility uses fixed safeguards: at least 1,000 records, false-match rate at or below 0.5%, false-match regression no greater than 0.1 percentage points, no high-value false matches, no regressions of previously correct matches, and at least a 3 percentage-point improvement in correct auto-resolution.
-
-## API
-
-FastAPI publishes interactive API documentation at http://127.0.0.1:8000/docs while the backend is running. Useful routes include:
-
-- `GET /health` — backend and configuration status
-- `GET /dashboard` — current dashboard data
-- `POST /demo/seed` — idempotently load the demo data
-- `POST /runs/start` — begin an agent workflow
-- `POST /runs/{run_id}/approval` — approve or reject a waiting candidate
-
-## Development
-
-ADK discovery entry point: `app.agent:root_agent`.
-
-## Evolution patch artifacts
-
-Policy configuration and Python snippets live under `app/evolution_patches/`.
-See [artifact layout and lifecycle](app/evolution_patches/README.md).
-Run `uv run python -m scripts.seed_patches` to archive local versions in MongoDB
-without importing transaction data. The richer policy and fuzzy scorer are drafts.
-
-The hard profile measures 20% baseline accuracy and ten +5 percentage-point gains
-to 70%; hard reference cases remain unresolved. See [the three active agents](docs/agents.md).
-
-The Evolution agent uses the [Policy Update Skill](app/evolution_patches/policies/policy_skill/SKILL.md) and
-[policy rules](app/evolution_patches/policies/policy_skill/rules.json), together with diagnosis and analysis.
-
-Storage and retention: see [docs/storage.md](docs/storage.md). Local fixtures supply evaluation and streaming data; MongoDB retains durable evolution state and short-lived operational telemetry.
+The architecture images describe the overall flow; the current frontend is React/Vite, served by FastAPI in production. Current storage behavior is documented above.

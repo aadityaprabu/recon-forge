@@ -1,0 +1,183 @@
+1
+00:00:00,000 --> 00:00:04,143
+Welcome to Recon Forge, a governed policy evolution application for
+
+2
+00:00:04,143 --> 00:00:08,286
+transaction reconciliation. It compares internal ledger records with processor settlements,
+
+3
+00:00:08,286 --> 00:00:12,429
+identifies unmatched transactions, and helps operators improve matching rules using
+
+4
+00:00:12,429 --> 00:00:16,571
+measured evidence. This demonstration uses synthetic data with four familiar
+
+5
+00:00:16,571 --> 00:00:20,714
+processor labels: Stripe, Adyen, PayPal, and Square. The dashboard shows
+
+6
+00:00:20,714 --> 00:00:24,857
+ingestion progress, open breaks, the active policy, and accuracy measured
+
+7
+00:00:24,857 --> 00:00:29,000
+on a fixed historical benchmark.
+
+8
+00:00:30,000 --> 00:00:34,143
+The policy history view makes every change traceable. Here, approved
+
+9
+00:00:34,143 --> 00:00:38,286
+versions have increased benchmark accuracy from twenty to forty percent.
+
+10
+00:00:38,286 --> 00:00:42,429
+Each processor has explicit settings for amount tolerance, settlement timing,
+
+11
+00:00:42,429 --> 00:00:46,571
+fixed fees, and percentage fees. Diagnosis identifies recurring failures, analysis
+
+12
+00:00:46,571 --> 00:00:50,714
+checks evidence and verified memories, and evolution proposes a bounded
+
+13
+00:00:50,714 --> 00:00:54,857
+change. The agent follows its policy skill and rules, changing
+
+14
+00:00:54,857 --> 00:00:59,000
+one supported parameter at a time.
+
+15
+00:01:00,000 --> 00:01:03,625
+Human approval is the control point before a candidate becomes
+
+16
+00:01:03,625 --> 00:01:07,250
+active. The review view compares current live accuracy with the
+
+17
+00:01:07,250 --> 00:01:10,875
+active and candidate backtest results. A compact diff highlights the
+
+18
+00:01:10,875 --> 00:01:14,500
+affected parameter, with red for the previous value, green for
+
+19
+00:01:14,500 --> 00:01:18,125
+the proposed value, and line numbers for context. Clicking approve
+
+20
+00:01:18,125 --> 00:01:21,750
+records the decision first. A persistent confirmation then tracks the
+
+21
+00:01:21,750 --> 00:01:25,375
+next steps, so operators can see that their decision was
+
+22
+00:01:25,375 --> 00:01:29,000
+saved.
+
+23
+00:01:30,000 --> 00:01:33,625
+The workflow view explains what happens after approval. Promotion activates
+
+24
+00:01:33,625 --> 00:01:37,250
+the eligible policy, replay checks it against held out data,
+
+25
+00:01:37,250 --> 00:01:40,875
+and verified learning is saved for future incidents. Four visible
+
+26
+00:01:40,875 --> 00:01:44,500
+progress stages distinguish queued work, active processing, and completion. If
+
+27
+00:01:44,500 --> 00:01:48,125
+replay fails its safety checks, the application can roll back
+
+28
+00:01:48,125 --> 00:01:51,750
+the candidate. Data ingestion runs independently of this workflow, so
+
+29
+00:01:51,750 --> 00:01:55,375
+transactions can keep arriving while a policy is being reviewed
+
+30
+00:01:55,375 --> 00:01:59,000
+or verified.
+
+31
+00:02:00,000 --> 00:02:03,625
+Backtesting measures improvement before a change reaches the active policy.
+
+32
+00:02:03,625 --> 00:02:07,250
+The independent historical benchmark contains eight thousand pairs, while the
+
+33
+00:02:07,250 --> 00:02:10,875
+live stream has been extended to twenty five thousand. The
+
+34
+00:02:10,875 --> 00:02:14,500
+synthetic scenarios include settlement delays, fee differences, amount drift, reference
+
+35
+00:02:14,500 --> 00:02:18,125
+errors, and duplicate allocation ambiguity. Guardrails check false matches, regressions,
+
+36
+00:02:18,125 --> 00:02:21,750
+and improvement. Candidate backtest accuracy is a projection for that
+
+37
+00:02:21,750 --> 00:02:25,375
+candidate; it becomes an active result only after approval and
+
+38
+00:02:25,375 --> 00:02:29,000
+successful verification.
+
+39
+00:02:30,000 --> 00:02:33,625
+The reconciliation view connects policy evolution to operational outcomes: matched
+
+40
+00:02:33,625 --> 00:02:37,250
+transactions, outstanding amounts, processor summaries, and unresolved cases. Long term
+
+41
+00:02:37,250 --> 00:02:40,875
+Mongo database storage retains policy versions, human decisions, evaluation results,
+
+42
+00:02:40,875 --> 00:02:44,500
+verified memories, and audit history. Raw demo fixtures remain local,
+
+43
+00:02:44,500 --> 00:02:48,125
+and routine telemetry expires automatically. Python code and fuzzy reference
+
+44
+00:02:48,125 --> 00:02:51,750
+evolution are reserved for a later stage. Recon Forge demonstrates
+
+45
+00:02:51,750 --> 00:02:55,375
+a controlled learning loop: observe failures, propose a small change,
+
+46
+00:02:55,375 --> 00:02:59,000
+measure it, approve it, and verify the outcome.
