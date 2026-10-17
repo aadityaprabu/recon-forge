@@ -130,14 +130,24 @@ class Repository:
         return result
 
     async def domain_metrics(self):
-        cases = await rows(self.db.reconciliation_cases)
+        # Aggregate in MongoDB instead of transferring every transaction each refresh.
+        cursor = await self.db.reconciliation_cases.aggregate([
+            {"$group": {"_id": {"currency": "$currency", "processor": "$processor",
+                                      "status": "$status", "break_type": "$break_type"},
+                         "count": {"$sum": 1}, "cents": {"$sum": "$amount_cents"}}}])
+        groups = await cursor.to_list(None)
         by_currency, by_processor = defaultdict(lambda: {"matched_cents": 0, "outstanding_cents": 0}), defaultdict(Counter)
-        for case in cases:
-            matched = case["status"] == "RESOLVED_AUTO"
-            by_currency[case["currency"]]["matched_cents" if matched else "outstanding_cents"] += case["amount_cents"]
-            by_processor[case["processor"]]["matched" if matched else "unresolved"] += 1
-        resolved = sum(c["status"] == "RESOLVED_AUTO" for c in cases)
-        return {"total": len(cases), "matched": resolved, "unresolved": len(cases)-resolved,
-                "match_rate": resolved / max(len(cases), 1), "by_currency": dict(by_currency),
-                "by_processor": dict(by_processor),
-                "break_buckets": dict(Counter(c["break_type"] for c in cases if c["status"] != "RESOLVED_AUTO"))}
+        buckets = Counter()
+        total = resolved = 0
+        for group in groups:
+            key, count = group["_id"], group["count"]
+            matched = key["status"] == "RESOLVED_AUTO"
+            total += count
+            resolved += count if matched else 0
+            by_currency[key["currency"]]["matched_cents" if matched else "outstanding_cents"] += group["cents"]
+            by_processor[key["processor"]]["matched" if matched else "unresolved"] += count
+            if not matched:
+                buckets[key["break_type"]] += count
+        return {"total": total, "matched": resolved, "unresolved": total-resolved,
+                "match_rate": resolved / max(total, 1), "by_currency": dict(by_currency),
+                "by_processor": dict(by_processor), "break_buckets": dict(buckets)}
