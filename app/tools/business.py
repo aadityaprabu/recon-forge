@@ -60,18 +60,23 @@ def check_date_boundary(ledger, settlement, window_days=2, policy=None):
     return distance <= window_days + grace
 
 
-def check_amount_patch(ledger, settlement, patch):
-    tolerance = patch.processor_amount_tolerance_cents.get(ledger["processor"], 0)
+def expected_settlement_amounts(ledger, patch):
     processor = ledger["processor"]
     gross = ledger["amount_cents"]
     fixed = patch.processor_fixed_fee_cents[processor]
-    tolerance = min(patch.maximum_tolerance_cents, max(tolerance, (abs(gross) * patch.relative_tolerance_bps + 9999) // 10000))
     quotient, remainder = divmod(gross * patch.processor_fee_bps[processor], 10000)
     percentage = quotient + int(remainder > 5000 or (remainder == 5000 and (patch.fee_rounding == "half_up" or quotient % 2 == 1)))
     # Explicit supported settlement forms: gross, fixed-fee net, percentage-fee
     # net. No automatic stacking of fees or agent-generated executable code.
-    expected_amounts = (gross,) if patch.fee_treatment == "gross_only" else (gross, gross - fixed, gross - percentage)
-    return any(abs(expected - settlement["amount_cents"]) <= tolerance for expected in expected_amounts)
+    return (gross,) if patch.fee_treatment == "gross_only" else (gross, gross - fixed, gross - percentage)
+
+
+def check_amount_patch(ledger, settlement, patch):
+    tolerance = patch.processor_amount_tolerance_cents.get(ledger["processor"], 0)
+    gross = ledger["amount_cents"]
+    tolerance = min(patch.maximum_tolerance_cents, max(tolerance, (abs(gross) * patch.relative_tolerance_bps + 9999) // 10000))
+    return any(abs(expected - settlement["amount_cents"]) <= tolerance
+               for expected in expected_settlement_amounts(ledger, patch))
 
 
 CHECKS = {"customer": check_customer, "currency": check_currency, "merchant": check_merchant,

@@ -2,12 +2,12 @@
 import asyncio
 import json
 
-from app.schemas import MatchingPolicy
+from app.schemas import Policy
 from app.tools.analytics import detect_incidents
 from app.tools.match_cascade import (match_by_fuzzy_score, match_by_human, match_by_id, match_by_llm,
                                      match_by_rule, run_cascade)
 
-POLICY = MatchingPolicy()
+POLICY = Policy(version="test")
 
 
 def ledger(n, **overrides):
@@ -36,14 +36,14 @@ def test_rule_accepts_cleaned_reference():
 
 
 def test_fuzzy_pairs_and_measures_the_difference_without_matching():
-    short_and_late = settlement(3, amount_cents=9_997, settlement_date="2026-09-02")
+    short = settlement(3, amount_cents=9_997)
     other_customer = settlement(4, reference="PAY-100003", customer_id="CUST-2")
-    result = match_by_fuzzy_score([ledger(3)], [short_and_late, other_customer], POLICY)
+    result = match_by_fuzzy_score([ledger(3)], [short, other_customer], POLICY)
     assert "matches" not in result
     [pair] = result["pairs"]
     assert pair["processor_record_id"] == "SET-3"
     evidence = pair["evidence"]
-    assert (evidence["amount_delta_cents"], evidence["date_delta_days"]) == (-3, 1)
+    assert (evidence["amount_delta_cents"], evidence["date_delta_days"]) == (-3, 0)
     assert evidence["checks"]["amount_patch"] is False and evidence["checks"]["customer"] is True
     # A reference typo on top of other differences is too weak to pair.
     typo = settlement(3, reference="PAY-100030", amount_cents=9_997, settlement_date="2026-09-02")
@@ -70,8 +70,10 @@ def test_llm_suggestion_must_name_a_supplied_candidate():
                 "confidence": 0.9, "reason": "same customer and amount"}
 
     rows, pool = [ledger(8)], [settlement(8, reference="XYZ")]
-    assert asyncio.run(match_by_llm(rows, pool, invents))["suggestions"] == []
-    assert asyncio.run(match_by_llm(rows, pool, picks))["suggestions"][0]["processor_record_id"] == "SET-8"
+    assert asyncio.run(match_by_llm(rows, pool, POLICY, invents))["suggestions"] == []
+    assert asyncio.run(match_by_llm(rows, pool, POLICY, picks))["suggestions"][0]["processor_record_id"] == "SET-8"
+    strict = Policy(version="strict", escalation={"confidence_min": 0.95})
+    assert asyncio.run(match_by_llm(rows, pool, strict, picks))["suggestions"] == []
 
 
 def test_human_decisions_are_validated_and_one_to_one():
@@ -116,14 +118,36 @@ def test_llm_only_reviews_rows_fuzzy_could_not_pair():
 def test_fuzzy_pair_supplies_incident_evidence_the_matcher_could_not():
     # Each ledger row shares its reference with a second customer's settlement, so the
     # matcher sees two candidates and records AMBIGUOUS with no evidence. Fuzzy keeps
-    # only the same-customer partner, which is 3 cents short.
+    # only the same-customer partner, which is 3 cents short. Sequential references
+    # make neighbours score about 0.88, so this needs a margin below the 0.10 default.
+    sequential = Policy(version="sequential", reference_matching={"minimum_similarity": 0.9,
+                                                                  "minimum_candidate_margin": 0.05})
     rows, pool = [], []
     for n in range(20, 32):
         rows.append(ledger(n, processor="PROC_C"))
         pool.append(settlement(n, processor="PROC_C", amount_cents=9_997))
         pool.append(settlement(n, processor="PROC_C", customer_id="CUST-9", processor_record_id=f"SET-X{n}"))
-    result = asyncio.run(run_cascade(rows, pool, POLICY))
+    assert asyncio.run(run_cascade(rows, pool, POLICY))["summary"]["fuzzy_pairs"] == 0
+    result = asyncio.run(run_cascade(rows, pool, sequential))
     assert all(c["evidence"]["source"] == "fuzzy" for c in result["cases"])
     [incident] = detect_incidents(result["cases"])
     assert (incident["processor"], incident["delta"], incident["count"]) == ("PROC_C", -3, 12)
     assert incident["evidence_sources"] == {"fuzzy": 12}
+
+
+def test_fuzzy_thresholds_come_from_the_policy():
+    short_and_late = [settlement(15, amount_cents=9_997, settlement_date="2026-09-02")]
+    assert match_by_fuzzy_score([ledger(15)], short_and_late, POLICY)["pairs"] == []
+    looser = Policy(version="looser", reference_matching={"minimum_similarity": 0.9})
+    [pair] = match_by_fuzzy_score([ledger(15)], short_and_late, looser)["pairs"]
+    assert pair["evidence"]["date_delta_days"] == 1
+
+
+def test_fuzzy_measures_amounts_after_approved_fees():
+    # Stripe-style 2.9% fee: $100.00 gross is expected to settle at $97.10; $97.09 arrived.
+    with_fee = Policy(version="fee", processor_overrides={"PROC_A": {"fees": {"percentage_bps": 290}}})
+    row, pool = [ledger(16)], [settlement(16, amount_cents=9_709)]
+    assert match_by_rule(row, pool, with_fee)["matches"] == []
+    [pair] = match_by_fuzzy_score(row, pool, with_fee)["pairs"]
+    assert (pair["evidence"]["amount_delta_cents"], pair["evidence"]["fee_adjusted_delta_cents"]) == (-291, -1)
+    assert match_by_fuzzy_score(row, pool, POLICY)["pairs"] == []

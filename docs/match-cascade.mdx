@@ -129,15 +129,38 @@ The AI can suggest; code decides what is allowed.
 - **One-to-one:** a settlement claimed by two records is dropped from every step.
 - **Hard boundaries:** fuzzy and AI candidates must share customer, currency, merchant, and processor.
 - **High value:** records of $10,000 or more are never fuzzy-paired.
-- **Amount ceiling:** gaps over 25¢ score zero, the same ceiling `MatchingPolicy` puts on any approved tolerance.
-- **Clear winner:** a fuzzy pair needs a score of at least 0.9 and a 0.05 lead over the runner-up.
+- **Amount ceiling:** the gap is measured after approved fees, and a gap at the policy's maximum tolerance (25¢) scores zero.
+- **Clear winner:** a fuzzy pair needs the policy's minimum similarity (0.95) and minimum lead over the runner-up (0.10).
 - **No invented IDs:** an AI suggestion naming a record outside its candidate list is discarded.
 - **Confidence floor:** AI suggestions below 0.7 confidence are discarded.
 - **Human decisions validated:** a choice of an unknown or already-matched settlement is rejected.
 
 ---
 
-## 7. A bug we caught on the way
+## 7. Fuzzy follows the policy
+
+Fuzzy has no private thresholds: every limit comes from the active, human-approved policy.
+
+| Fuzzy needs | Policy setting | Default |
+|---|---|---|
+| Minimum score to pair | `reference_matching.minimum_similarity` | 0.95 |
+| Minimum lead over runner-up | `reference_matching.minimum_candidate_margin` | 0.10 |
+| Amount gap that scores zero | `amount_matching.maximum_tolerance_cents` | 25¢ |
+| Fees to subtract first | `fees` and processor overrides | none approved yet |
+| AI suggestion confidence floor | `escalation.confidence_min` | 0.7 |
+
+```text
+Stripe takes an approved 2.9% fee
+Ledger $100.00  →  expected after fee $97.10  →  settlement $97.09
+Old fuzzy: gap $2.91, score 0.70, not paired
+New fuzzy: gap 1¢,    score 0.99, paired and explained
+```
+
+Making fuzzy looser or stricter is a **policy change**: proposed, backtested, and approved like any other.
+
+---
+
+## 8. A bug we caught on the way
 
 The first fuzzy version scored amount closeness relative to 1% of the payment. On a $260 payment, a **50¢** gap looked "close".
 
@@ -154,32 +177,35 @@ Result: **20 wrong pairs**, every one a real mismatch. Capping the gap at 25¢ b
 
 ---
 
-## 8. Results on the demo dataset
+## 9. Results on the demo dataset
 
-Checked against the protected ground truth, which the matching code never reads.
+Checked against the protected ground truth, which the matching code never reads. Fuzzy uses the baseline policy's thresholds.
 
 | | Historical (8,000) | Live (1,500) |
 |---|---|---|
 | Auto-matched by id | 6,198 | 1,029 |
 | Auto-matched by rule | 460 | 59 |
 | **Wrong auto-matches** | **0** | **0** |
-| Fuzzy pairs found | 1,068 | 342 |
-| **Fuzzy pairs correct** | **1,068 / 1,068** | **342 / 342** |
+| Fuzzy pairs found | 862 | 320 |
+| **Fuzzy pairs correct** | **862 / 862** | **320 / 320** |
+| True pairs left unpaired (5¢ fees score 0.94, under 0.95) | 206 | 22 |
 | Incident sent to the AI | none (same as before) | PROC_B −3¢ × 222 (same as before) |
 
 - Auto-match counts are **identical** to the original matcher: nothing is resolved without an approved rule.
 - The self-improving loop is **preserved**: the PROC_B 3¢ incident still reaches the agents.
-- **1,410 open cases** now arrive at the human queue with a correct, explained partner attached.
+- **1,182 open cases** now arrive at the human queue with a correct, explained partner attached.
+- Loosening the policy to 0.90 / 0.05 pairs all 1,410 fee cases, still with zero wrong pairs: a change to propose and approve, not to hard-code.
 
 ---
 
-## 9. Where fuzzy adds new evidence
+## 10. Where fuzzy adds new evidence
 
 On this dataset every messy reference can still be cleaned, so incident evidence still comes from the original matcher.
 Fuzzy adds evidence the matcher **could not produce** when references are broken or shared:
 
 ```text
 12 PROC_C records, each sharing its reference with another customer's settlement
+(sequential references need a 0.05 margin: neighbours score about 0.88)
    Original matcher → AMBIGUOUS, no evidence → AI sees nothing
    With cascade     → fuzzy keeps the same-customer partner (3¢ short)
                     → incident: PROC_C −3¢ × 12, evidence_sources = fuzzy: 12
@@ -189,23 +215,24 @@ This is the situation real bank statements, UPI QR payments, and B2B transfers c
 
 ---
 
-## 10. What changed in the code
+## 11. What changed in the code
 
 | File | Change |
 |---|---|
-| `app/tools/match_cascade.py` | **New.** The five steps and `run_cascade` |
+| `app/tools/match_cascade.py` | **New.** The five steps and `run_cascade`, all reading the active policy |
+| `app/tools/business.py` | `expected_settlement_amounts`: after-fee amounts shared by the rule step and fuzzy |
 | `app/schemas.py` | `MatchSuggestion`: strict format for AI suggestions |
 | `app/prompts.py` | `CASE_REVIEW` prompt for the AI reviewer |
 | `app/tools/analytics.py` | Incidents record `evidence_sources` (rule or fuzzy) |
 | `app/tools/matcher.py` | `BREAK_REASONS` shared constant (no behaviour change) |
-| `tests/test_match_cascade.py` | **New.** 9 tests, all passing |
+| `tests/test_match_cascade.py` | **New.** 11 tests, all passing |
 
 The original `match()` is untouched in behaviour and remains the only matcher the **backtester** uses,
 so policy evaluation stays fast, deterministic, and free of AI calls.
 
 ---
 
-## 11. What is next
+## 12. What is next
 
 1. **Wire it in:** replace `match()` with `run_cascade()` in `repositories.reconcile()`.
 2. **Human review screen:** show each suggestion with its measured difference and Accept / Reject.

@@ -5,24 +5,27 @@ partner of an open record and measures what differs, so the case stays open as
 evidence for the diagnosis and upgrader agents; the LLM may only suggest. Every
 settlement is matched at most once, and the deterministic matcher stays the
 authority for backtesting.
+
+Every stage reads the active Policy: id and rule match with its approved
+tolerances, fees, and settlement windows; fuzzy compares amounts after approved
+fees and takes its thresholds from reference_matching and amount_matching; the
+LLM's confidence floor is escalation.confidence_min.
 """
 import json
 from collections import Counter, defaultdict
-from datetime import date
 from difflib import SequenceMatcher
 
 from pydantic import ValidationError
 
-from app.schemas import MatchingPolicy, MatchSuggestion
-from app.tools.business import make_match_decision, normalize_reference
+from app.schemas import MatchSuggestion, Policy
+from app.tools.business import (expected_settlement_amounts, local_settlement_date, make_match_decision,
+                                normalize_reference)
 from app.tools.matcher import BREAK_REASONS, deduplicate, evidence_item, match
 
 HARD_FIELDS = ("customer_id", "currency", "merchant_id", "processor")
 HIGH_VALUE_CENTS = 1_000_000
-FUZZY_MIN_SCORE = 0.9
-FUZZY_MIN_MARGIN = 0.05
-# Same ceiling MatchingPolicy puts on any approved tolerance; fuzzy may not exceed it.
-FUZZY_MAX_AMOUNT_DELTA_CENTS = 25
+# Matches the largest settlement window a policy may approve.
+FUZZY_DATE_SCALE_DAYS = 5
 LLM_MAX_CANDIDATES = 5
 
 
@@ -47,36 +50,52 @@ def _hard_key(row):
     return tuple(row[field] for field in HARD_FIELDS)
 
 
-def fuzzy_score(row, other):
-    """0..1 similarity over the soft fields; hard fields must already be equal."""
+def fee_adjusted_delta(row, other, rules):
+    """Settlement minus the closest amount the approved fee rules expect."""
+    expected = min(expected_settlement_amounts(row, rules), key=lambda amount: abs(other["amount_cents"] - amount))
+    return other["amount_cents"] - expected
+
+
+def fuzzy_score(row, other, policy: Policy, rules=None):
+    """0..1 similarity over the soft fields; hard fields must already be equal.
+
+    Amount closeness is measured after the policy's approved fees, and a gap at
+    the policy's maximum tolerance or beyond scores zero.
+    """
+    rules = rules or policy.matching
     reference = SequenceMatcher(None, normalize_reference(row["reference"]),
                                 normalize_reference(other["reference"])).ratio()
-    delta = abs(row["amount_cents"] - other["amount_cents"])
-    amount = max(0.0, 1 - delta / FUZZY_MAX_AMOUNT_DELTA_CENTS)
-    days = abs((date.fromisoformat(row["settlement_date"]) - date.fromisoformat(other["settlement_date"])).days)
-    when = max(0.0, 1 - days / 5)
+    gap, cap = abs(fee_adjusted_delta(row, other, rules)), policy.amount_matching.maximum_tolerance_cents
+    amount = max(0.0, 1 - gap / cap) if cap else float(gap == 0)
+    zone = policy.settlement.timezone
+    days = abs((local_settlement_date(other["settlement_date"], zone) - local_settlement_date(row["settlement_date"], zone)).days)
+    when = max(0.0, 1 - days / FUZZY_DATE_SCALE_DAYS)
     return round(0.5 * reference + 0.3 * amount + 0.2 * when, 4)
 
 
-def pair_evidence(row, other, policy: MatchingPolicy, score):
+def pair_evidence(row, other, rules, score):
     """What differs between a fuzzy pair, in the matcher's evidence shape."""
-    checks = make_match_decision(row, other, policy)["checks"]
-    return {**evidence_item(row, other, policy, checks), "source": "fuzzy",
+    checks = make_match_decision(row, other, rules)["checks"]
+    return {**evidence_item(row, other, rules, checks), "source": "fuzzy",
             "processor_record_id": other["processor_record_id"], "fuzzy_score": score,
+            "fee_adjusted_delta_cents": fee_adjusted_delta(row, other, rules),
             "reference_raw_equal": row["reference"] == other["reference"]}
 
 
-def _ranked_candidates(internal, settlements):
+def _ranked_candidates(internal, settlements, policy: Policy):
+    rules = policy.matching
     index = defaultdict(list)
     for other in settlements:
         index[_hard_key(other)].append(other)
-    return {row["internal_record_id"]: sorted(((fuzzy_score(row, other), other) for other in index[_hard_key(row)]),
+    return {row["internal_record_id"]: sorted(((fuzzy_score(row, other, policy, rules), other)
+                                               for other in index[_hard_key(row)]),
                                               key=lambda item: item[0], reverse=True)
             for row in internal}
 
 
-def match_by_id(internal, settlements, policy: MatchingPolicy) -> dict:
+def match_by_id(internal, settlements, policy: Policy) -> dict:
     """Exact, uncleaned reference shared by exactly one settlement, with every fixed check passing."""
+    rules = policy.matching
     index = defaultdict(list)
     for other in settlements:
         index[other["reference"]].append(other)
@@ -85,25 +104,28 @@ def match_by_id(internal, settlements, policy: MatchingPolicy) -> dict:
         candidates = index.get(row["reference"], [])
         if len(candidates) == 1:
             other = candidates[0]
-            if make_match_decision(row, other, policy)["decision"] == "MATCH":
+            if make_match_decision(row, other, rules)["decision"] == "MATCH":
                 proposals.append(_pair(row, other, "id", 1.0))
     return _split(internal, _claim(proposals))
 
 
-def match_by_rule(internal, settlements, policy: MatchingPolicy) -> dict:
+def match_by_rule(internal, settlements, policy: Policy) -> dict:
     """The existing deterministic matcher: cleaned reference plus the seven fixed checks."""
-    result = match(internal, settlements, policy)
+    result = match(internal, settlements, policy.matching)
     matches = [{**m, "method": "rule", "confidence": 1.0} for m in result["auto_matches"]]
     return {**_split(internal, matches), "cases": result["cases"]}
 
 
-def match_by_fuzzy_score(internal, settlements, policy: MatchingPolicy) -> dict:
+def match_by_fuzzy_score(internal, settlements, policy: Policy) -> dict:
     """Find each open record's likely partner and measure the difference; resolves nothing.
 
-    A pair needs equal hard fields, a score of at least FUZZY_MIN_SCORE, and a clear
-    lead over the runner-up. High-value records are never paired.
+    A pair needs equal hard fields, a score of at least
+    reference_matching.minimum_similarity, and a lead of at least
+    reference_matching.minimum_candidate_margin over the runner-up. High-value
+    records are never paired.
     """
-    ranked = _ranked_candidates(internal, settlements)
+    rules, thresholds = policy.matching, policy.reference_matching
+    ranked = _ranked_candidates(internal, settlements, policy)
     pairs = []
     for row in internal:
         candidates = ranked[row["internal_record_id"]]
@@ -111,8 +133,8 @@ def match_by_fuzzy_score(internal, settlements, policy: MatchingPolicy) -> dict:
             continue
         best, other = candidates[0]
         runner_up = candidates[1][0] if len(candidates) > 1 else 0.0
-        if best >= FUZZY_MIN_SCORE and best - runner_up >= FUZZY_MIN_MARGIN:
-            pairs.append({**_pair(row, other, "fuzzy", best), "evidence": pair_evidence(row, other, policy, best)})
+        if best >= thresholds.minimum_similarity and best - runner_up >= thresholds.minimum_candidate_margin:
+            pairs.append({**_pair(row, other, "fuzzy", best), "evidence": pair_evidence(row, other, rules, best)})
     return {"pairs": _claim(pairs)}
 
 
@@ -128,9 +150,13 @@ def _parse_suggestion(raw, row, allowed):
     return suggestion
 
 
-async def match_by_llm(internal, settlements, reviewer, *, confidence_min=0.7) -> dict:
-    """Ask `reviewer` (async payload -> JSON) to pick among top candidates; returns suggestions only."""
-    ranked = _ranked_candidates(internal, settlements)
+async def match_by_llm(internal, settlements, policy: Policy, reviewer) -> dict:
+    """Ask `reviewer` (async payload -> JSON) to pick among top candidates; returns suggestions only.
+
+    Suggestions below escalation.confidence_min are dropped.
+    """
+    confidence_min = policy.escalation.confidence_min
+    ranked = _ranked_candidates(internal, settlements, policy)
     suggestions = []
     for row in internal:
         candidates = ranked[row["internal_record_id"]][:LLM_MAX_CANDIDATES]
@@ -187,11 +213,12 @@ def _fuzzy_suggestion(pair):
     evidence = pair["evidence"]
     return {"internal_record_id": pair["internal_record_id"], "processor_record_id": pair["processor_record_id"],
             "confidence": pair["confidence"], "method": "fuzzy",
-            "reason": f'amount {evidence["amount_delta_cents"]:+d}¢, date {evidence["date_delta_days"]:+d}d, '
+            "reason": f'amount {evidence["fee_adjusted_delta_cents"]:+d}¢ after fees, '
+                      f'date {evidence["date_delta_days"]:+d}d, '
                       f'reference {"identical" if evidence["reference_raw_equal"] else "reformatted"}'}
 
 
-async def run_cascade(internal, settlements, policy: MatchingPolicy, *, reviewer=None, decisions=None) -> dict:
+async def run_cascade(internal, settlements, policy: Policy, *, reviewer=None, decisions=None) -> dict:
     """Run the stages in priority order; only id, rule, and human stages consume records.
 
     The returned `cases` keep the matcher's shape, so `detect_incidents` reads
@@ -219,7 +246,7 @@ async def run_cascade(internal, settlements, policy: MatchingPolicy, *, reviewer
 
     paired = {p["internal_record_id"] for p in pairs}
     unpaired = [r for r in remaining if r["internal_record_id"] not in paired]
-    llm = (await match_by_llm(unpaired, pool, reviewer))["suggestions"] if reviewer else []
+    llm = (await match_by_llm(unpaired, pool, policy, reviewer))["suggestions"] if reviewer else []
 
     human = match_by_human(remaining, pool, [_fuzzy_suggestion(p) for p in pairs] + llm, decisions)
     consume(human["matches"])
