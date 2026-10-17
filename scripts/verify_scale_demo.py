@@ -61,7 +61,10 @@ def verify(dataset):
                       "guardrails_passed": gate["passed"]})
         policy = candidate
     assert [s["accuracy_after"] for s in steps] == list(range(25, 71, 5))
-    assert [s["held_out_accuracy_after"] for s in steps] == list(range(25, 71, 5))
+    # Larger live samples can include incidental valid matches shared by two
+    # rules. Preserve measured values and require the expected trend, not exact rounding.
+    assert all(abs(step["held_out_accuracy_after"] - expected) < 0.01
+               for step, expected in zip(steps, range(25, 71, 5)))
     remaining = detect_incidents(match(live[0], live[1], policy.matching)["cases"])
     assert not remaining, "All ten targeted clusters should be resolved"
     return {"mode": "OFFLINE_VALIDATION_NOT_PRODUCTION_PROMOTIONS", "live_records": len(live[0]),

@@ -1,14 +1,15 @@
 {
   "project": "ReconForge",
-  "dataset_id": "scale5000-four-processors-v6",
+  "dataset_id": "scale5000-varied-v8",
   "seed": 5000,
   "historical_base_pairs": 8000,
-  "live_base_pairs": 5000,
+  "live_base_pairs": 25000,
   "baseline_policy_file": "policies/policy.json",
   "preserve_live_order": true,
   "phase_size": 500,
-  "phase_count": 10,
-  "pause_between_phases": true,
+  "phase_count": 50,
+  "expected_evolutions": 10,
+  "pause_between_phases": false,
   "stream_batch_size": 25,
-  "description": "Ten 500-pair phases: 250 policy drift, 50 exact, 150 hard reference matches, 50 invalid per phase. Ten single-field policy changes across amounts, settlement windows, fixed fees and percentage fees. Fixed benchmark accuracy: 20%, 25%, ..., 70%; 30% reference-recovery cases remain unresolved. Includes duplicate-allocation ambiguity controls. Requires human approval for each promoted version."
+  "description": "Fifty 500-pair batches repeating ten drift types: 250 policy drift, 50 exact, 150 hard reference matches, 50 invalid per phase. Ten single-field policy changes across amounts, settlement windows, fixed fees and percentage fees. Fixed benchmark accuracy: 20%, 25%, ..., 70%; 30% reference-recovery cases remain unresolved. Includes randomized dates across 120 days, weekends, month/year boundaries, variable fee amounts, transposed references and duplicate-allocation ambiguity controls. Requires human approval for each promoted version."
 }

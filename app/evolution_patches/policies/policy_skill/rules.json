@@ -1,6 +1,6 @@
 {
   "id": "policy-update",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "required_inputs": ["policy", "diagnosis", "analysis", "incident", "evaluator_metrics"],
   "processor_ids": ["PROC_A", "PROC_B", "PROC_C", "PROC_D"],
   "max_changed_policy_leaves": 1,

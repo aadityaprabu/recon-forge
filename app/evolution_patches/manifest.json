@@ -2,8 +2,8 @@
   {
     "artifact_type": "policy",
     "name": "reconciliation",
-    "version": "v4.1-four-processor-baseline",
-    "parent": null,
+    "version": "v4.2-explicit-processor-baseline",
+    "parent": "v4.1-four-processor-baseline",
     "status": "BASELINE",
     "file": "policies/policy.json"
   },

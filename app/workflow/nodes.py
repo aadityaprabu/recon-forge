@@ -3,7 +3,7 @@ import time
 
 from app.persistence.repositories import EvaluatorRepository
 from app.schemas import Policy, EvolutionResult, apply_patch, PolicyPatch
-from app.tools.analytics import detect_incidents
+from app.tools.analytics import detect_incidents, prioritize_incidents
 from app.tools.backtester import compare, digest
 from app.tools.guardrails import decide
 from app.tools.memory_tools import write_verified_memory
@@ -13,7 +13,7 @@ from app.tools.promotion import promote, rollback
 class Operations:
     def __init__(self, repo):
         self.repo = repo
-        self.evaluator = EvaluatorRepository(repo.db)
+        self.evaluator = EvaluatorRepository(repo.db, dataset=repo.dataset)
 
     async def reconcile(self, run_id):
         run = await self.repo.run(run_id)
@@ -22,6 +22,12 @@ class Operations:
         result = await self.repo.reconcile(run_id, policy)
         cursor = await self.repo.db.control.find_one({"_id": "stream"})
         incidents = detect_incidents(result["cases"])
+        previous = await self.repo.db.workflow_runs.find_one(
+            {"status": "COMPLETED", "dataset_id": run.get("dataset_id")},
+            {"proposal.candidate_patch": 1}, sort=[("updated_at", -1)])
+        previous_patch = (previous or {}).get("proposal", {}).get("candidate_patch", {})
+        previous_field = next((key for key in previous_patch if key != "processor" and previous_patch[key] is not None), None)
+        incidents = prioritize_incidents(incidents, previous_field)
         evaluator_state = await self.evaluator.current_live_metrics(policy, cursor["position"])
         await self.repo.stage(run_id, "diagnose", baseline_summary=result["summary"], incidents=incidents,
                               phase_index=(max(cursor["position"], 1) - 1) // cursor["phase_size"] if cursor.get("phase_size") else None,

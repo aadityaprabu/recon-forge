@@ -55,20 +55,23 @@ def create_api(settings=None, database=None, reasoners=None):
             await seed(db, dataset)
             await db.control.update_one({"_id": "engine"}, {"$set": {
                 "enabled": True, "interval_seconds": 1,
-                "batch_size": dataset.manifest.get("stream_batch_size", 3)}}, upsert=True)
+                "batch_size": 10, "ingestion_interval_seconds": 5}}, upsert=True)
 
-        async def scheduler():
+        async def scheduler(ingest=False):
             while True:
-                await asyncio.sleep(1)
+                ingestion = await db.control.find_one({"_id": "engine"}) if ingest and db is not None else {}
+                await asyncio.sleep(max(1, (ingestion or {}).get("ingestion_interval_seconds", 5)) if ingest else 1)
                 if db is None:
                     continue
                 try:
                     stream = await db.control.find_one({"_id": "stream"})
                     if not stream:
                         continue
-                    if stream["position"] < stream["total"]:
-                        await advance(db, dataset, dataset.manifest.get("stream_batch_size", 3))
-                    # Ingest first so each evaluator tick sees the latest committed batch.
+                    if ingest:
+                        if stream["position"] < stream["total"]:
+                            await advance(db, dataset, max(1, min(5000, (ingestion or {}).get("batch_size", 10))))
+                        continue
+                    # Evaluation and ingestion have independent tasks and leases.
                     result = await api.state.controller.tick()
                     if isinstance(result, dict) and result.get("status") in {"WAITING_APPROVAL", "COMPLETED"}:
                         # A recovered workflow clears the transient banner; its
@@ -87,13 +90,13 @@ def create_api(settings=None, database=None, reasoners=None):
                     await db.control.update_one({"_id": "engine"}, {"$set": {
                         "last_error": type(exc).__name__, "last_error_details": error_details(exc),
                         "last_error_at": time.time()}}, upsert=True)
-        task = asyncio.create_task(scheduler())
+        tasks = [asyncio.create_task(scheduler(ingest=True)), asyncio.create_task(scheduler())]
         try:
             yield
         finally:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             if client:
                 await client.close()
 

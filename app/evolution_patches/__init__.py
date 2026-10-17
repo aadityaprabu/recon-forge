@@ -26,6 +26,8 @@ async def seed_patch_versions(db):
     await collection.create_index([("artifact_type", 1), ("name", 1), ("version", 1)], unique=True)
     count = 0
     for artifact in local_versions():
+        if artifact["status"] == "DRAFT":
+            continue
         key = {field: artifact[field] for field in ("artifact_type", "name", "version")}
         existing = await collection.find_one(key)
         if existing and any(existing.get(field) != artifact[field]
