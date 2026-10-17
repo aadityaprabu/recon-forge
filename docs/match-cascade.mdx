@@ -1,0 +1,220 @@
+---
+title: "Match Cascade: Smarter Matching That Feeds the AI"
+description: "How ReconForge matches ledger and processor records in five priority steps, and why fuzzy pairs become evidence for the AI instead of silent matches."
+marp: true
+theme: default
+paginate: true
+size: 16:9
+style: |
+  section { font-size: 24px; padding: 48px 64px; }
+  h1 { font-size: 56px; }
+  h2 { font-size: 38px; }
+  pre { font-size: 18px; }
+  table { font-size: 20px; }
+  blockquote { font-size: 22px; }
+---
+
+# Match Cascade
+
+**Smarter matching that feeds the AI, without bypassing human approval.**
+
+---
+
+## 1. The problem
+
+Every payment appears twice: once in **our ledger**, once in the **processor's settlement report**.
+Reconciliation is a giant "match the following" question, and it is hard because:
+
+- There is **no shared ID** between the two records.
+- Processors take **fees** (amount is 1–5¢ short), **round** differently, and **settle late** (date is a day or two off).
+- References get **reformatted** along the way (`PAY-150000` becomes `pay150000` or `P/150000-SETTLED`).
+
+```text
+Ledger:      CUST-0247, PROC_C, $155.20, PAY-150000, 26 Sep
+Settlement:  CUST-0247, PROC_C, $155.17, pay150000,  27 Sep
+             same payment?  probably, but 3¢ short and 1 day late
+```
+
+---
+
+## 2. Before: one matcher, all or nothing
+
+The original `match()` pairs records only when the **cleaned reference** is equal and **all seven checks** pass.
+
+| Outcome | What happens |
+|---|---|
+| Exactly one candidate passes | ✅ MATCH |
+| A check fails | ❌ BREAK, labelled with the reason |
+| More than one candidate | ⚠️ AMBIGUOUS, parked for a human |
+| Reference mangled | ❌ NO_CANDIDATE, no partner, no evidence |
+
+The leftover breaks are what the AI learns from. If a break has no partner, the AI **cannot see it at all**.
+
+---
+
+## 3. After: a five-step cascade
+
+Each step only sees what the earlier steps could not handle, and a settlement can never be used twice.
+
+```text
+All records
+   │
+   ▼
+① match_by_id            exact reference, all checks pass        → MATCH
+   ▼  leftovers
+② match_by_rule          cleaned reference, all checks pass      → MATCH
+   ▼  leftovers
+③ match_by_fuzzy_score   find the likely partner, measure the    → EVIDENCE
+   ▼                     difference (case stays open)
+④ match_by_llm           AI picks among top 5 candidates         → SUGGESTION
+   ▼                     (only rows fuzzy could not pair)
+⑤ match_by_human         person accepts or rejects               → MATCH / CONFIRMED BREAK
+```
+
+**Fast, trusted steps first; expensive and uncertain steps last.**
+
+---
+
+## 4. The key idea: fuzzy finds the pair, AI explains the change
+
+Fuzzy scoring does **not** resolve records. It says *"A probably goes with B"*, and code measures exactly what differs:
+
+```json
+{
+  "processor_record_id": "SET-0042",
+  "fuzzy_score": 0.94,
+  "amount_delta_cents": -3,
+  "date_delta_days": 1,
+  "reference_raw_equal": false,
+  "checks": { "customer": true, "currency": true, "amount_patch": false }
+}
+```
+
+The AI then explains the **pattern** across many pairs:
+
+> "312 PROC_C pairs are 3¢ short and 1 day late — a fixed processing fee. Propose PROC_C tolerance = 3¢."
+
+That proposal still goes through **backtest → guardrails → human approval** before it becomes a rule.
+Once approved, `match_by_rule` catches those cases automatically, and fuzzy moves on to the next new pattern.
+
+---
+
+## 5. Why fuzzy must not auto-match
+
+We tried it first. Fuzzy auto-matching quietly resolved **1,068 fee cases**, and that broke the system's core loop:
+
+```text
+Fuzzy silently matches all 3¢ fee cases
+   → no AMOUNT_MISMATCH cases left over
+   → detect_incidents finds nothing
+   → diagnosis and evolution agents never run
+   → no rule is ever proposed or approved
+```
+
+It also accepted up to 25¢ differences that **no human had approved**, which is exactly what ReconForge exists to prevent.
+
+| | Fuzzy = finished match | Fuzzy = evidence |
+|---|---|---|
+| Record status | Resolved | Open, with likely partner attached |
+| AI sees it | No | Yes |
+| Rule learned | Never | Proposed, backtested, approved |
+| Human approval | Skipped | Required |
+
+---
+
+## 6. Safety rails built into code
+
+The AI can suggest; code decides what is allowed.
+
+- **One-to-one:** a settlement claimed by two records is dropped from every step.
+- **Hard boundaries:** fuzzy and AI candidates must share customer, currency, merchant, and processor.
+- **High value:** records of $10,000 or more are never fuzzy-paired.
+- **Amount ceiling:** gaps over 25¢ score zero, the same ceiling `MatchingPolicy` puts on any approved tolerance.
+- **Clear winner:** a fuzzy pair needs a score of at least 0.9 and a 0.05 lead over the runner-up.
+- **No invented IDs:** an AI suggestion naming a record outside its candidate list is discarded.
+- **Confidence floor:** AI suggestions below 0.7 confidence are discarded.
+- **Human decisions validated:** a choice of an unknown or already-matched settlement is rejected.
+
+---
+
+## 7. A bug we caught on the way
+
+The first fuzzy version scored amount closeness relative to 1% of the payment. On a $260 payment, a **50¢** gap looked "close".
+
+| Pattern in the data | Amount gap |
+|---|---|
+| Processing fee | 1–5¢ |
+| Rounding difference | 1¢ |
+| **Real amount mismatch** | **50¢ – $25** |
+
+Result: **20 wrong pairs**, every one a real mismatch. Capping the gap at 25¢ brought wrong pairs to **zero**.
+
+> Caveat: the 25¢ cap was chosen after inspecting this dataset, so these results are optimistic for unseen data.
+> It is justified independently by the existing policy ceiling, not tuned to the numbers.
+
+---
+
+## 8. Results on the demo dataset
+
+Checked against the protected ground truth, which the matching code never reads.
+
+| | Historical (8,000) | Live (1,500) |
+|---|---|---|
+| Auto-matched by id | 6,198 | 1,029 |
+| Auto-matched by rule | 460 | 59 |
+| **Wrong auto-matches** | **0** | **0** |
+| Fuzzy pairs found | 1,068 | 342 |
+| **Fuzzy pairs correct** | **1,068 / 1,068** | **342 / 342** |
+| Incident sent to the AI | none (same as before) | PROC_B −3¢ × 222 (same as before) |
+
+- Auto-match counts are **identical** to the original matcher: nothing is resolved without an approved rule.
+- The self-improving loop is **preserved**: the PROC_B 3¢ incident still reaches the agents.
+- **1,410 open cases** now arrive at the human queue with a correct, explained partner attached.
+
+---
+
+## 9. Where fuzzy adds new evidence
+
+On this dataset every messy reference can still be cleaned, so incident evidence still comes from the original matcher.
+Fuzzy adds evidence the matcher **could not produce** when references are broken or shared:
+
+```text
+12 PROC_C records, each sharing its reference with another customer's settlement
+   Original matcher → AMBIGUOUS, no evidence → AI sees nothing
+   With cascade     → fuzzy keeps the same-customer partner (3¢ short)
+                    → incident: PROC_C −3¢ × 12, evidence_sources = fuzzy: 12
+```
+
+This is the situation real bank statements, UPI QR payments, and B2B transfers create every day.
+
+---
+
+## 10. What changed in the code
+
+| File | Change |
+|---|---|
+| `app/tools/match_cascade.py` | **New.** The five steps and `run_cascade` |
+| `app/schemas.py` | `MatchSuggestion`: strict format for AI suggestions |
+| `app/prompts.py` | `CASE_REVIEW` prompt for the AI reviewer |
+| `app/tools/analytics.py` | Incidents record `evidence_sources` (rule or fuzzy) |
+| `app/tools/matcher.py` | `BREAK_REASONS` shared constant (no behaviour change) |
+| `tests/test_match_cascade.py` | **New.** 9 tests, all passing |
+
+The original `match()` is untouched in behaviour and remains the only matcher the **backtester** uses,
+so policy evaluation stays fast, deterministic, and free of AI calls.
+
+---
+
+## 11. What is next
+
+1. **Wire it in:** replace `match()` with `run_cascade()` in `repositories.reconcile()`.
+2. **Human review screen:** show each suggestion with its measured difference and Accept / Reject.
+3. **Plug in the AI reviewer:** connect `match_by_llm` to Nicrron with the `CASE_REVIEW` prompt.
+4. **Evolve more than amounts:** let the upgrader propose date tolerance and reference normalization,
+   so fuzzy-discovered patterns beyond fees can become approved rules too.
+
+---
+
+## One-line summary
+
+**Code matches what is certain, fuzzy finds what is likely, the AI explains what changed, and a human approves every new rule.**

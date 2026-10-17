@@ -252,6 +252,13 @@ class EvolutionResult(StrictModel):
     required_eval_slices: list[str] = Field(default_factory=list)
 
 
+class MatchSuggestion(StrictModel):
+    internal_record_id: str
+    processor_record_id: str | None
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+
+
 def apply_patch(base: Policy, proposal: EvolutionResult, version: str) -> Policy:
     if proposal.parent_version != base.version:
         raise ValueError("Candidate references a stale parent policy")

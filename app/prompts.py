@@ -43,3 +43,11 @@ the one change is supported and its false-match risk. This is a candidate requir
 independent backtesting and human approval, never an instruction to activate code.
 No Markdown or prose outside JSON. Use [] for required_eval_slices if appropriate.
 """
+
+CASE_REVIEW = """Return exactly one JSON object with these keys and no others:
+{"internal_record_id": string, "processor_record_id": string or null,
+"confidence": number from 0 to 1, "reason": string}. No prose or Markdown.
+Copy internal_record_id from the ledger record. Pick processor_record_id only from
+the supplied candidates, or null when none plausibly represents the same
+transaction. Keep reason to one short sentence naming the deciding evidence. Your
+answer is only a suggestion: a human confirms every match."""

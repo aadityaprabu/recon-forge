@@ -7,6 +7,9 @@ from app.tools.business import make_match_decision, normalize_reference, local_s
 
 BUSINESS_FIELDS = ("merchant_id", "customer_id", "processor", "channel", "country",
                    "amount_cents", "currency", "settlement_date", "reference")
+BREAK_REASONS = {"customer": "CUSTOMER_MISMATCH", "currency": "CURRENCY_MISMATCH",
+                 "merchant": "MERCHANT_MISMATCH", "processor": "PROCESSOR_MISMATCH",
+                 "reference": "REFERENCE_MISMATCH", "date": "DATE_BOUNDARY", "amount_patch": "AMOUNT_MISMATCH"}
 
 
 def deduplicate(rows):
@@ -25,6 +28,17 @@ def deduplicate(rows):
     return originals, duplicates
 
 
+def evidence_item(row, other, policy: MatchingPolicy, checks) -> dict:
+    """What differs between a ledger row and a candidate settlement."""
+    return {"processor": row["processor"],
+            "amount_delta_cents": other["amount_cents"] - row["amount_cents"],
+            "ledger_amount_cents": row["amount_cents"],
+            "date_delta_days": (business_day_distance(local_settlement_date(row["settlement_date"], policy.timezone), local_settlement_date(other["settlement_date"], policy.timezone))
+                if policy.day_basis == "business" else abs((local_settlement_date(other["settlement_date"], policy.timezone) - local_settlement_date(row["settlement_date"], policy.timezone)).days)),
+            "tolerance_cents": policy.processor_amount_tolerance_cents.get(row["processor"], 0),
+            "checks": checks}
+
+
 def match(internal: list[dict], settlements: list[dict], policy: MatchingPolicy) -> dict:
     canonical, duplicates = deduplicate(settlements)
     index = defaultdict(list)
@@ -39,14 +53,7 @@ def match(internal: list[dict], settlements: list[dict], policy: MatchingPolicy)
             decision = make_match_decision(row, other, policy)
             for name, passed in decision["checks"].items():
                 check_counts[name]["pass" if passed else "fail"] += 1
-            item = {"processor": row["processor"],
-                    "amount_delta_cents": other["amount_cents"] - row["amount_cents"],
-                    "ledger_amount_cents": row["amount_cents"],
-                    "date_delta_days": (business_day_distance(local_settlement_date(row["settlement_date"], policy.timezone), local_settlement_date(other["settlement_date"], policy.timezone))
-                        if policy.day_basis == "business" else abs((local_settlement_date(other["settlement_date"], policy.timezone) - local_settlement_date(row["settlement_date"], policy.timezone)).days)),
-                    "tolerance_cents": policy.processor_amount_tolerance_cents.get(row["processor"], 0),
-                    "checks": decision["checks"]}
-            evidence.append(item)
+            evidence.append(evidence_item(row, other, policy, decision["checks"]))
             if decision["decision"] == "MATCH":
                 accepted.append(other)
         case = {"internal_record_id": row["internal_record_id"],
@@ -60,10 +67,7 @@ def match(internal: list[dict], settlements: list[dict], policy: MatchingPolicy)
             if len(accepted) > 1 or len(candidates) > 1:
                 case["break_type"] = "AMBIGUOUS"
             elif evidence:
-                reasons = {"customer": "CUSTOMER_MISMATCH", "currency": "CURRENCY_MISMATCH",
-                           "merchant": "MERCHANT_MISMATCH", "processor": "PROCESSOR_MISMATCH",
-                           "reference": "REFERENCE_MISMATCH", "date": "DATE_BOUNDARY", "amount_patch": "AMOUNT_MISMATCH"}
-                case["break_type"] = next(reason for key, reason in reasons.items() if not evidence[0]["checks"][key])
+                case["break_type"] = next(reason for key, reason in BREAK_REASONS.items() if not evidence[0]["checks"][key])
             cases.append(case)
     counts = Counter(p["processor_record_id"] for p in provisional)
     matches = []

@@ -43,6 +43,7 @@ def detect_incidents(cases: list[dict]) -> list[dict]:
             incidents.append({'processor': processor, 'break_type': kind, 'delta_field': field,
                               'delta': delta, 'patch_field': patch_field, 'suggested_value': value,
                               'count': count, 'cluster_size': len(rows), 'concentration': concentration,
+                              'evidence_sources': dict(Counter(r['evidence'].get('source', 'rule') for r in rows)),
                               'constant_checks_passed': {name: sum(r['evidence']['checks'][name] for r in rows)
                                   for name in ('customer', 'currency', 'merchant', 'processor', 'reference', 'date')}})
     return sorted(incidents, key=lambda i: (-i['count'], i['processor']))
