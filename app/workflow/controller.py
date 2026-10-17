@@ -69,8 +69,8 @@ class Controller:
         self.sessions = MongoSessionService(db)
         self.reasoners = reasoners
 
-    def runner(self):
-        return Runner(app=create_app(self.repo, self.settings.model_name, self.reasoners), session_service=self.sessions)
+    def runner(self, policy_skill=None):
+        return Runner(app=create_app(self.repo, self.settings.model_name, self.reasoners, policy_skill=policy_skill), session_service=self.sessions)
 
     async def start(self):
         async with engine_lease(self.db):
@@ -96,6 +96,8 @@ class Controller:
         await self.db.workflow_runs.insert_one({"run_id": run_id, "session_id": session_id,
             "user_id": "demo-user", "invocation_id": None, "status": "RUNNING", "current_node": "start",
             "created_at": time.time(), "updated_at": time.time(), "position": cursor["position"],
+            "dataset_id": cursor.get("dataset_id", "seed-6643"),
+            "phase_index": (max(cursor["position"], 1) - 1) // cursor["phase_size"] if cursor.get("phase_size") else None,
             "baseline_policy": policy.model_dump(), "baseline_evaluator": evaluator_state,
             "prior_attempts": prior})
         await self._execute(run_id, runner, types.Content(role="user", parts=[types.Part(text="Evaluate reconciliation and propose a safe improvement.")]))
@@ -205,7 +207,7 @@ class Controller:
                 name="adk_request_input", id=call.id, response=response))])
         if not session.events:
             message = types.Content(role="user", parts=[types.Part(text="Evaluate reconciliation.")])
-        await self._execute(run_id, self.runner(), message)
+        await self._execute(run_id, self.runner(policy_skill=run.get("policy_skill")), message)
         await self.db.doorbell_events.update_many({"run_id": run_id, "consumed": False},
                                                  {"$set": {"consumed": True, "consumed_at": time.time()}})
         return await self.repo.run(run_id)
@@ -225,8 +227,8 @@ class Controller:
                 live_metrics["sample_size"] >= min_evaluation_records
                 and live_metrics["accuracy"] < accuracy_threshold
             )
-            evolution_triggered = bool(incidents) or accuracy_triggered
-            decision = "REQUEST_UPGRADE" if evolution_triggered else "KEEP_CURRENT_PATCH"
+            evolution_triggered = bool(incidents)
+            decision = "REQUEST_UPGRADE" if evolution_triggered else "MANUAL_REVIEW_REQUIRED" if accuracy_triggered else "KEEP_CURRENT_PATCH"
             await self.db.evaluator_decisions.update_one({"_id": f"{cursor['position']}:{policy.version}"}, {"$set": {
                 "timestamp": time.time(), "position": cursor["position"], "policy_version": policy.version,
                 "active_policy": policy.model_dump(), "decision": decision, "incidents": incidents,
@@ -251,6 +253,11 @@ class Controller:
             engine = await self.db.control.find_one({"_id": "engine"})
             if not (engine or {}).get("enabled"):
                 return {"status": "IDLE"}
+            if not incidents:
+                # Low accuracy can come from unsupported reference recovery.
+                # Do not start a policy workflow with no actionable incident.
+                return {"status": "MANUAL_REVIEW_REQUIRED" if accuracy_triggered else "MONITORING",
+                        "position": cursor["position"], "accuracy": live_metrics["accuracy"]}
             if not evolution_triggered:
                 return {"status": "AWAITING_EVOLUTION_TRIGGER", "position": cursor["position"],
                         "accuracy": live_metrics["accuracy"], "accuracy_threshold": accuracy_threshold,

@@ -4,7 +4,7 @@ import time
 async def write_verified_memory(repo, run_id, incident, evaluation, policy):
     memory_id = f"MEM-{run_id}-{policy.version}"
     memory = {"memory_id": memory_id, "verified": True, "source": "measured_replay",
-              "summary": f"{incident['processor']} {incident['break_type']} {incident['delta']}",
+              "summary": f"{incident['processor']} {incident['break_type']} {incident.get('patch_field', incident['delta_field'])} {incident['delta']}",
               "resolution": policy.matching.model_dump(), "policy_version": policy.version,
               "run_id": run_id, "trace_id": run_id, "actor": "memory_writer", "timestamp": time.time(),
               "idempotency_key": memory_id,

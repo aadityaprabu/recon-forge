@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Installed frontend dependencies and local OS metadata
+node_modules/
+.DS_Store

@@ -1,0 +1,36 @@
+{
+  "id": "policy-update",
+  "version": "1.0.0",
+  "required_inputs": ["policy", "diagnosis", "analysis", "incident", "evaluator_metrics"],
+  "processor_ids": ["PROC_A", "PROC_B", "PROC_C", "PROC_D"],
+  "max_changed_policy_leaves": 1,
+  "parameters": {
+    "amount_tolerance_cents": {
+      "path": "processor_overrides.{processor}.amount_matching.absolute_tolerance_cents",
+      "minimum": 0,
+      "maximum": 25,
+      "unit": "cents"
+    },
+    "settlement_window_days": {
+      "path": "processor_overrides.{processor}.settlement.window_business_days",
+      "minimum": 0,
+      "maximum": 5,
+      "unit": "days using settlement.day_basis"
+    },
+    "fixed_fee_cents": {
+      "path": "processor_overrides.{processor}.fees.fixed_fee_cents",
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "cents"
+    },
+    "fee_bps": {
+      "path": "processor_overrides.{processor}.fees.percentage_bps",
+      "minimum": 0,
+      "maximum": 300,
+      "unit": "basis points; 100 bps = 1%"
+    }
+  },
+  "human_approval_required": true,
+  "python_and_fuzzy_evolution": "ON_HOLD",
+  "refund_and_group_matching": "DISABLED"
+}

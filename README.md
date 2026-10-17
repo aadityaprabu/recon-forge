@@ -39,6 +39,12 @@ Agents can propose changes only within the approved policy surface. Deterministi
 
 Dataset files are included in `ReconForge_Reconciliation_Dataset/`.
 
+The expanded [5,000-record demo](docs/scale5000.md) is included in
+`ReconForge_Scale5000_Dataset/`. It supports ten sequential single-field policy
+evolutions across amounts, dates, fixed fees, and percentage fees, with fixed guardrails and an approval checkpoint between phases.
+Set `DATASET_DIR=ReconForge_Scale5000_Dataset` and use a fresh
+`MONGODB_DB=reconforge_policy_skill_demo` to run it separately from the original demo.
+
 ## Configure
 
 From the repository root, create your local environment file:
@@ -75,7 +81,7 @@ Open the local URL printed by Vite, usually http://127.0.0.1:5173. The Vite serv
 
 ## Seed or repair demo data
 
-The runtime baseline lives in `app/policies/baseline.json`, separate from the
+The runtime baseline lives in `app/evolution_patches/policies/policy.json`, separate from the
 original dataset policy. It is validated against `app.schemas.Policy` and seeded
 into MongoDB's `harness_policies` collection. The `control` document with
 `_id: active_policy` holds the current runtime policy. Existing records are
@@ -142,3 +148,16 @@ uv run pytest
 ```
 
 ADK discovery entry point: `app.agent:root_agent`.
+
+## Evolution patch artifacts
+
+Policy configuration and Python snippets live under `app/evolution_patches/`.
+See [artifact layout and lifecycle](app/evolution_patches/README.md).
+Run `uv run python -m scripts.seed_patches` to archive local versions in MongoDB
+without importing transaction data. The richer policy and fuzzy scorer are drafts.
+
+The hard profile measures 20% baseline accuracy and ten +5 percentage-point gains
+to 70%; hard reference cases remain unresolved. See [the three active agents](docs/agents.md).
+
+The Evolution agent uses the [Policy Update Skill](app/evolution_patches/policies/policy_skill/SKILL.md) and
+[policy rules](app/evolution_patches/policies/policy_skill/rules.json), together with diagnosis and analysis.

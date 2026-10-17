@@ -2,7 +2,7 @@
 import time
 
 from app.persistence.repositories import EvaluatorRepository
-from app.schemas import Policy, EvolutionResult, apply_patch
+from app.schemas import Policy, EvolutionResult, apply_patch, PolicyPatch
 from app.tools.analytics import detect_incidents
 from app.tools.backtester import compare, digest
 from app.tools.guardrails import decide
@@ -24,6 +24,7 @@ class Operations:
         incidents = detect_incidents(result["cases"])
         evaluator_state = await self.evaluator.current_live_metrics(policy, cursor["position"])
         await self.repo.stage(run_id, "diagnose", baseline_summary=result["summary"], incidents=incidents,
+                              phase_index=(max(cursor["position"], 1) - 1) // cursor["phase_size"] if cursor.get("phase_size") else None,
                               evaluator_metrics=evaluator_state["metrics"])
         return {"run_id": run_id, "position": cursor["position"], "policy": policy.model_dump(), "summary": result["summary"],
                 "evaluator_metrics": evaluator_state["metrics"],
@@ -36,19 +37,31 @@ class Operations:
         candidate = apply_patch(base, EvolutionResult.model_validate(proposal), f"v-{run_id}")
         if not run.get("incidents") or proposal["candidate_patch"]["processor"] != run["incidents"][0]["processor"]:
             raise ValueError("Patch must target the processor supported by this run's evidence")
+        if run.get("dataset_id", "").startswith("scale5000-"):
+            # This demo deliberately tests one measured change at a time. Agents
+            # cannot jump ahead to a broad tolerance that hides later incidents.
+            incident = run["incidents"][0]
+            key, _, value = PolicyPatch.model_validate(proposal["candidate_patch"]).change()
+            if key != incident["patch_field"] or value != incident["suggested_value"]:
+                raise ValueError("Scale demo requires one minimal field change supported by the observed incident")
         internal, settlements, truth = await self.evaluator.corpus()
         # Predictions are business-only; labels are confined to compare/score.
         evaluation = compare(base, candidate, internal, settlements, truth)
         evaluation.update(run_id=run_id, candidate_version=candidate.version,
-                          baseline_version=base.version, created_at=time.time(), dataset_seed=6643)
+                          baseline_version=base.version, created_at=time.time(),
+                          dataset_seed=5000 if run.get("dataset_id", "").startswith("scale5000-") else 6643)
         evaluation["guardrails"] = decide(evaluation)
         await self.repo.db.harness_policies.update_one({"version": candidate.version}, {"$setOnInsert": {
             "version": candidate.version, "policy": candidate.model_dump(), "proposal": proposal,
+            "policy_skill": {key: run["policy_skill"][key] for key in ("id", "version", "sha256")} if run.get("policy_skill") else None,
+            "benchmark": {key: evaluation["candidate"][key] for key in
+                          ("accuracy", "auto_resolution_rate", "sample_size", "false_match_rate")},
             "status": "ELIGIBLE_FOR_APPROVAL" if evaluation["guardrails"]["passed"] else "REJECTED",
-            "patch_name": f'{proposal["candidate_patch"]["processor"]} '
-                          f'{proposal["candidate_patch"]["amount_tolerance_cents"]}¢ amount tolerance',
+            "patch_name": f'{candidate.processor_names[proposal["candidate_patch"]["processor"]]} '
+                          f'{PolicyPatch.model_validate(proposal["candidate_patch"]).change()[0].replace("_", " ")}: '
+                          f'{PolicyPatch.model_validate(proposal["candidate_patch"]).change()[2]}',
             "created_at": time.time(), "run_id": run_id, "trace_id": run_id,
-            "actor": "upgrader", "timestamp": time.time()}}, upsert=True)
+            "actor": "evolution_agent", "timestamp": time.time()}}, upsert=True)
         await self.repo.db.policy_evaluations.update_one({"run_id": run_id}, {"$setOnInsert": evaluation}, upsert=True)
         await self.repo.stage(run_id, "guardrails", candidate_version=candidate.version,
                               candidate_policy=candidate.model_dump(), evaluation=evaluation,

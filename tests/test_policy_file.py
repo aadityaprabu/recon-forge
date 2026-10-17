@@ -7,8 +7,11 @@ from app.schemas import Policy
 
 
 class PolicyFileTests(unittest.IsolatedAsyncioTestCase):
-    def test_baseline_preserves_runtime_defaults(self):
-        self.assertEqual(load_baseline(), Policy(version="v1"))
+    def test_baseline_is_the_latest_four_processor_policy(self):
+        baseline = load_baseline()
+        self.assertEqual(baseline.version, "v4.1-four-processor-baseline")
+        self.assertEqual(len(baseline.processor_names), 4)
+        self.assertEqual(baseline.settlement.day_basis, "business")
 
     async def test_seed_preserves_existing_active_policy(self):
         db = SimpleNamespace(harness_policies=AsyncMock(), control=AsyncMock())
@@ -22,7 +25,7 @@ class PolicyFileTests(unittest.IsolatedAsyncioTestCase):
     async def test_reusing_version_with_changed_content_is_rejected(self):
         db = SimpleNamespace(harness_policies=AsyncMock(), control=AsyncMock())
         existing = load_baseline().model_dump()
-        existing["matching"]["processor_amount_tolerance_cents"]["PROC_A"] = 5
+        existing["processor_overrides"]["PROC_A"] = {"amount_matching": {"absolute_tolerance_cents": 5}}
         db.harness_policies.find_one.return_value = {"policy": existing}
         with self.assertRaises(ValueError):
             await seed_policy(db, load_baseline())

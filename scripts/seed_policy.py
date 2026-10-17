@@ -3,7 +3,8 @@ import asyncio
 
 from app.config import Settings
 from app.persistence.mongo import connect
-from app.policies import load_baseline, seed_policy
+from app.policies import seed_policy
+from app.demo.generator import Dataset
 
 
 async def main():
@@ -11,7 +12,7 @@ async def main():
     client, db = connect(settings)
     try:
         await db.harness_policies.create_index("version", unique=True)
-        baseline = load_baseline()
+        baseline = Dataset(settings.dataset_dir).baseline()
         await seed_policy(db, baseline)
         saved = await db.harness_policies.find_one({"version": baseline.version})
         assert saved["policy"] == baseline.model_dump()

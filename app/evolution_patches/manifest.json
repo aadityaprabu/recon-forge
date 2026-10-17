@@ -1,0 +1,18 @@
+[
+  {
+    "artifact_type": "policy",
+    "name": "reconciliation",
+    "version": "v4.1-four-processor-baseline",
+    "parent": null,
+    "status": "BASELINE",
+    "file": "policies/policy.json"
+  },
+  {
+    "artifact_type": "python_code",
+    "name": "reference_similarity",
+    "version": "v1",
+    "parent": null,
+    "status": "DRAFT",
+    "file": "python_code/reference_similarity_v1.py"
+  }
+]

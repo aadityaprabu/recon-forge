@@ -3,7 +3,7 @@ from collections import Counter, defaultdict
 from datetime import date
 
 from app.schemas import MatchingPolicy
-from app.tools.business import make_match_decision, normalize_reference
+from app.tools.business import make_match_decision, normalize_reference, local_settlement_date, business_day_distance
 
 BUSINESS_FIELDS = ("merchant_id", "customer_id", "processor", "channel", "country",
                    "amount_cents", "currency", "settlement_date", "reference")
@@ -41,7 +41,9 @@ def match(internal: list[dict], settlements: list[dict], policy: MatchingPolicy)
                 check_counts[name]["pass" if passed else "fail"] += 1
             item = {"processor": row["processor"],
                     "amount_delta_cents": other["amount_cents"] - row["amount_cents"],
-                    "date_delta_days": (date.fromisoformat(other["settlement_date"]) - date.fromisoformat(row["settlement_date"])).days,
+                    "ledger_amount_cents": row["amount_cents"],
+                    "date_delta_days": (business_day_distance(local_settlement_date(row["settlement_date"], policy.timezone), local_settlement_date(other["settlement_date"], policy.timezone))
+                        if policy.day_basis == "business" else abs((local_settlement_date(other["settlement_date"], policy.timezone) - local_settlement_date(row["settlement_date"], policy.timezone)).days)),
                     "tolerance_cents": policy.processor_amount_tolerance_cents.get(row["processor"], 0),
                     "checks": decision["checks"]}
             evidence.append(item)

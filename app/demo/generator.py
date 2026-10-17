@@ -1,4 +1,4 @@
-"""The supplied seed-6643 fixture is authoritative; this module loads it."""
+"""Load an explicitly selected deterministic dataset and its stream manifest."""
 import csv
 import json
 from pathlib import Path
@@ -9,6 +9,11 @@ from app.policies import load_baseline
 class Dataset:
     def __init__(self, directory: Path):
         self.directory = Path(directory)
+        self.manifest = self.load("dataset_manifest")
+
+    @property
+    def live_total(self):
+        return self.manifest["live_base_pairs"]
 
     def load(self, name):
         return json.loads((self.directory / f"{name}.json").read_text())
@@ -18,7 +23,7 @@ class Dataset:
             raise ValueError("Unknown split")
         internal = self.load(f"{split}_internal_ledger")
         settlements = self.load(f"{split}_processor_settlement")
-        if split == "live":
+        if split == "live" and not self.manifest.get("preserve_live_order"):
             # Lead with the known fee-drift slice so the demo reaches a real,
             # repeatable evolution incident within the first 300 streamed rows.
             truth = self.load("live_ground_truth")
@@ -34,6 +39,13 @@ class Dataset:
         return internal, settlements
 
     def baseline(self):
+        if self.manifest.get("baseline_policy_file"):
+            from app.evolution_patches import ROOT
+            from app.schemas import Policy
+            path = (ROOT / self.manifest["baseline_policy_file"]).resolve()
+            if not path.is_relative_to(ROOT.resolve()):
+                raise ValueError("Baseline must be an evolution policy artifact")
+            return Policy.model_validate_json(path.read_text())
         # The newer business specification supersedes the dataset's global policy.
         # Preserve supplied files; start with zero tolerance on each processor.
         return load_baseline()

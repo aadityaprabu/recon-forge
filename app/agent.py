@@ -6,9 +6,10 @@ from google.adk.apps import App, ResumabilityConfig
 from google.adk.workflow import node
 
 from app.agents import create_agents
-from app.schemas import DiagnosisResult, EvolutionResult, MemoryResult
+from app.schemas import DiagnosisResult, EvolutionResult, AnalysisResult
 from app.workflow.approval import approval_node, wait_for_data
 from app.workflow.nodes import Operations
+from app.evolution_patches.policies.policy_skill import load_policy_skill, skill_metadata
 
 
 def as_dict(value):
@@ -38,8 +39,9 @@ def as_dict(value):
         raise ValueError(f"Agent response did not contain valid JSON. Response begins: {preview}") from original_error
 
 
-def create_app(repo, model_name, reasoners=None):
-    agents = reasoners if reasoners is not None else create_agents(model_name)
+def create_app(repo, model_name, reasoners=None, policy_skill=None):
+    policy_skill = policy_skill or load_policy_skill()
+    agents = reasoners if reasoners is not None else create_agents(model_name, policy_skill=policy_skill)
     ops = Operations(repo)
 
     @node(name="reconcile")
@@ -81,22 +83,30 @@ def create_app(repo, model_name, reasoners=None):
             await ctx.run_node(wait_for_data, {"run_id": run_id, "position": measured["position"]})
             measured = await ctx.run_node(reconcile, run_id)
         diagnosis = DiagnosisResult.model_validate(as_dict(await ctx.run_node(agents["diagnosis"], measured)))
-        await repo.stage(run_id, "memory", diagnosis=diagnosis.model_dump())
+        await repo.stage(run_id, "analysis", diagnosis=diagnosis.model_dump())
         if diagnosis.status == "NEED_MORE_EVIDENCE" or diagnosis.confidence < measured["policy"]["escalation"]["confidence_min"]:
             return await ctx.run_node(reject, {"run_id": run_id, "reason": "Diagnosis needs stronger evidence"})
         memories = await ctx.run_node(retrieve, measured)
-        interpretation = MemoryResult.model_validate(as_dict(await ctx.run_node(agents["memory"], {
-            "incident": measured["incident"], "memories": memories})))
+        interpretation = AnalysisResult.model_validate(as_dict(await ctx.run_node(agents["analysis"], {
+            "incident": measured["incident"], "diagnosis": diagnosis.model_dump(),
+            "policy": measured["policy"], "evaluator_metrics": measured["evaluator_metrics"], "memories": memories})))
         if not set(interpretation.memory_ids) <= {m["memory_id"] for m in memories}:
-            return await ctx.run_node(reject, {"run_id": run_id, "reason": "Memory agent cited unknown evidence"})
-        await repo.stage(run_id, "upgrade", retrieved_memory_ids=interpretation.memory_ids)
+            return await ctx.run_node(reject, {"run_id": run_id, "reason": "Analysis agent cited unknown evidence"})
+        if interpretation.supported_processor != measured["incident"]["processor"]:
+            return await ctx.run_node(reject, {"run_id": run_id, "reason": "Analysis targets an unsupported processor"})
+        if interpretation.status == "NEED_MORE_EVIDENCE" or interpretation.confidence < measured["policy"]["escalation"]["confidence_min"]:
+            return await ctx.run_node(reject, {"run_id": run_id, "reason": "Analysis needs stronger evidence"})
+        await repo.stage(run_id, "upgrade", retrieved_memory_ids=interpretation.memory_ids,
+                         analysis=interpretation.model_dump(), policy_skill=policy_skill)
+        await repo.audit(run_id, "policy_skill_consulted", skill_metadata(policy_skill), actor="evolution_agent")
         run = await repo.run(run_id)
         proposal = EvolutionResult.model_validate(as_dict(await ctx.run_node(agents["evolution"], {
             "policy": measured["policy"], "diagnosis": diagnosis.model_dump(),
+            "policy_skill": skill_metadata(policy_skill), "policy_rules": policy_skill["rules"],
             "evaluator_metrics": measured["evaluator_metrics"],
             "incident": measured["incident"], "memories": memories,
-            "memory_interpretation": interpretation.model_dump(), "prior_attempts": run.get("prior_attempts", [])})))
-        package = await ctx.run_node(evaluate, {"run_id": run_id, "proposal": proposal.model_dump()})
+            "analysis": interpretation.model_dump(), "prior_attempts": run.get("prior_attempts", [])})))
+        package = await ctx.run_node(evaluate, {"run_id": run_id, "proposal": proposal.model_dump(exclude_none=True)})
         if not package["evaluation"]["guardrails"]["passed"]:
             return await ctx.run_node(reject, {"run_id": run_id, "reason": "; ".join(package["evaluation"]["guardrails"]["reasons"])})
         decision = await ctx.run_node(approval_node, package)

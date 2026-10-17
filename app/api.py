@@ -24,7 +24,7 @@ from app.workflow.controller import Controller, BusyError
 
 
 class StreamRequest(BaseModel):
-    count: int = Field(default=50, ge=1, le=1500)
+    count: int = Field(default=50, ge=1, le=5000)
 
 
 class ApprovalRequest(BaseModel):
@@ -54,7 +54,8 @@ def create_api(settings=None, database=None, reasoners=None):
             # stream ingestion and evaluator scheduling for the life of the API.
             await seed(db, dataset)
             await db.control.update_one({"_id": "engine"}, {"$set": {
-                "enabled": True, "interval_seconds": 1, "batch_size": 3}}, upsert=True)
+                "enabled": True, "interval_seconds": 1,
+                "batch_size": dataset.manifest.get("stream_batch_size", 3)}}, upsert=True)
 
         async def scheduler():
             while True:
@@ -66,9 +67,14 @@ def create_api(settings=None, database=None, reasoners=None):
                     if not stream:
                         continue
                     if stream["position"] < stream["total"]:
-                        await advance(db, dataset, 3)
+                        await advance(db, dataset, dataset.manifest.get("stream_batch_size", 3))
                     # Ingest first so each evaluator tick sees the latest committed batch.
-                    await api.state.controller.tick()
+                    result = await api.state.controller.tick()
+                    if isinstance(result, dict) and result.get("status") in {"WAITING_APPROVAL", "COMPLETED"}:
+                        # A recovered workflow clears the transient banner; its
+                        # earlier failed runs remain in the historical audit.
+                        await db.control.update_one({"_id": "engine"}, {"$unset": {
+                            "last_error": "", "last_error_details": "", "last_error_at": ""}})
                 except BusyError:
                     pass
                 except ValueError as exc:
@@ -194,13 +200,23 @@ def create_api(settings=None, database=None, reasoners=None):
         current_evaluation = next((item for item in decisions
                                    if active_policy and item.get("policy_version") == active_policy["version"]), None)
         sessions = await db.adk_sessions.find({}, {"_id": 0, "session_id": 1, "last_event_seq": 1, "last_invocation_id": 1}).to_list(None)
+        policies = await rows(db.harness_policies)
+        policy_history = [{"version": p["version"], "name": p.get("patch_name", p["version"]),
+                           **p["benchmark"]} for p in sorted(policies, key=lambda p: p.get("created_at", 0))
+                          if p.get("benchmark") and (p["version"] == (active_policy or {}).get("version")
+                              or p.get("status") == "ARCHIVED")]
         return {"active_policy": active_policy,
+                "policy_accuracy_history": policy_history,
+                "agents": [
+                    {"name": "Diagnosis", "stage": "diagnose", "role": "Identify the recurring break and likely root cause."},
+                    {"name": "Analysis", "stage": "analysis", "role": "Check measured evidence, risks, and verified memories."},
+                    {"name": "Evolution", "stage": "upgrade", "role": "Use the Policy Update Skill, diagnosis, and analysis to propose one bounded policy change."}],
                 "active_patch_name": (active_patch or {}).get("patch_name", "Zero-tolerance baseline" if active_policy and active_policy["version"] == "v1" else (active_policy or {}).get("version")),
-                "stream": await db.control.find_one({"_id": "stream"}, {"_id": 0}) or {"position": 0, "total": 1500},
+                "stream": await db.control.find_one({"_id": "stream"}, {"_id": 0}) or {"position": 0, "total": dataset.live_total},
                 "engine": await db.control.find_one({"_id": "engine"}, {"_id": 0}) or {},
                 "runs": runs, "evaluations": evaluations, "domain": await repo.domain_metrics(),
                 "snapshots": list(reversed(snapshots)), "sessions": sessions,
-                "policies": await rows(db.harness_policies),
+                "policies": policies,
                 "memories": await rows(db.incident_memories, {"verified": True}),
                 "doorbells": await db.doorbell_events.find({}, {"_id": 0}).sort("timestamp", -1).limit(50).to_list(None),
                 "checks": snapshots[0].get("check_counts", {}) if snapshots else {},

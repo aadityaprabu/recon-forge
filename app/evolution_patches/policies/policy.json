@@ -1,0 +1,57 @@
+{
+  "version": "v4.1-four-processor-baseline",
+  "parent": null,
+  "amount_matching": {
+    "absolute_tolerance_cents": 0,
+    "relative_tolerance_bps": 0,
+    "maximum_tolerance_cents": 25
+  },
+  "settlement": {
+    "window_business_days": 2,
+    "day_basis": "business",
+    "weekend_grace_days": 0,
+    "timezone": "America/New_York"
+  },
+  "fees": {
+    "treatment": "gross_to_net",
+    "percentage_bps": 0,
+    "fixed_fee_cents": 0,
+    "rounding": "half_even"
+  },
+  "refunds": {
+    "enabled": false,
+    "allow_partial": false,
+    "matching_window_days": 14,
+    "require_original_transaction": true
+  },
+  "group_matching": {
+    "enabled": false,
+    "strategy": "one_to_many",
+    "maximum_group_size": 3,
+    "require_balanced_total": true
+  },
+  "reference_matching": {
+    "strategy": "exact",
+    "minimum_similarity": 0.95,
+    "minimum_candidate_margin": 0.1,
+    "python_patch": null
+  },
+  "processor_overrides": {
+    "PROC_A": {},
+    "PROC_B": {},
+    "PROC_C": {},
+    "PROC_D": {}
+  },
+  "retrieval": {
+    "memory_top_k": 5
+  },
+  "escalation": {
+    "confidence_min": 0.7
+  },
+  "processor_names": {
+    "PROC_A": "Stripe",
+    "PROC_B": "Adyen",
+    "PROC_C": "PayPal",
+    "PROC_D": "Square"
+  }
+}
